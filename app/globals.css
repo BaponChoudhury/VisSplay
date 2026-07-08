@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  height: 100%;
+  overscroll-behavior: none;
+}
+
+/* Slim dark scrollbars for the panel */
+.panel-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.panel-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.panel-scroll::-webkit-scrollbar-thumb {
+  background: #334155; /* slate-700 */
+  border-radius: 4px;
+}
+
+/* Distance label chips rendered by google.maps.Marker `label.className` */
+.splay-handle-label {
+  background: rgba(15, 23, 42, 0.85); /* slate-900 */
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-top: 28px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* Dark theming for the Places autocomplete web component */
+gmp-place-autocomplete {
+  --gmp-mat-color-surface: #1e293b; /* slate-800 */
+  --gmp-mat-color-on-surface: #e2e8f0; /* slate-200 */
+  --gmp-mat-color-on-surface-variant: #94a3b8; /* slate-400 */
+  --gmp-mat-color-primary: #38bdf8; /* sky-400 */
+  width: 100%;
+}

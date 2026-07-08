@@ -1,0 +1,47 @@
+/** Plain serialisable lat/lng (google.maps.LatLngLiteral-compatible). */
+export interface LatLng {
+  lat: number;
+  lng: number;
+}
+
+export type StandardId = "mfs" | "cd109" | "manual";
+
+export interface SplayParams {
+  standard: StandardId;
+  /** Major-road speed in kph (design speed for CD 109, street speed for MfS). */
+  speedKph: number;
+  /** X distance (setback along minor arm) in metres. */
+  xDistance: number;
+  /**
+   * Required Y distance in metres. Auto-filled from the SSD lookup for the
+   * selected standard/speed, but always user-overridable (e.g. from a measured
+   * 85th percentile speed survey).
+   */
+  yRequired: number;
+  /** True when the engineer has typed a custom Y rather than using the table. */
+  yOverridden: boolean;
+}
+
+/**
+ * The splay geometry. `mouth` is the point where the minor-arm centreline
+ * meets the nearer channel line / carriageway edge of the major road — the
+ * apex of both sight triangles. `origin` is Point A (driver position, X metres
+ * back). `left`/`right` are Points B and C on the nearer carriageway edge.
+ */
+export interface SplayPoints {
+  mouth: LatLng | null;
+  origin: LatLng | null;
+  left: LatLng | null;
+  right: LatLng | null;
+}
+
+export interface SavedAssessment {
+  id: string;
+  name: string;
+  createdAt: string; // ISO 8601
+  updatedAt: string; // ISO 8601
+  params: SplayParams;
+  points: SplayPoints;
+  mapCenter: LatLng;
+  mapZoom: number;
+}
