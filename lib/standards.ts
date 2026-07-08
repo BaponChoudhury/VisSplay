@@ -93,6 +93,7 @@ export function ssdForSpeed(
     const hi = table[i + 1];
     if (speedKph >= lo.kph && speedKph <= hi.kph) {
       if (speedKph === lo.kph) return { ssd: lo.ssd, clamped: false, interpolated: false };
+      if (speedKph === hi.kph) return { ssd: hi.ssd, clamped: false, interpolated: false };
       const t = (speedKph - lo.kph) / (hi.kph - lo.kph);
       const ssd = lo.ssd + t * (hi.ssd - lo.ssd);
       return { ssd: Math.round(ssd * 10) / 10, clamped: false, interpolated: true };
