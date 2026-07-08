@@ -46,6 +46,8 @@ export default function StreetViewPanel({
   const markersRef = useRef<google.maps.Marker[]>([]);
   const [status, setStatus] = useState<"loading" | "ok" | "none">("loading");
   const [imageDate, setImageDate] = useState<string | null>(null);
+  // How far the nearest available panorama is from the requested standpoint.
+  const [snapDistM, setSnapDistM] = useState<number | null>(null);
 
   // Create the panorama once.
   useEffect(() => {
@@ -56,9 +58,15 @@ export default function StreetViewPanel({
       fullscreenControl: false,
       motionTracking: false,
       motionTrackingControl: false,
-      showRoadLabels: true,
+      showRoadLabels: false,
       zoomControl: true,
       enableCloseButton: false,
+      // Lock the standpoint: dragging only rotates the view. Disable
+      // click-to-move and the navigation arrows so the camera can't wander off
+      // the driver position (it only moves when you click the map).
+      clickToGo: false,
+      linksControl: false,
+      panControl: true,
     });
     panoRef.current = pano;
     serviceRef.current = new google.maps.StreetViewService();
@@ -101,6 +109,7 @@ export default function StreetViewPanel({
         pano.setPov({ heading: headingDeg(panoPos, target), pitch: 0 });
         pano.setZoom(0);
         setImageDate(data.imageDate ?? null);
+        setSnapDistM(distanceM(panoPos, cameraLocation));
         setStatus("ok");
         drawSightline(pano, panoPos, target);
       }
@@ -120,7 +129,7 @@ export default function StreetViewPanel({
     markersRef.current = [];
     const total = distanceM(from, to);
     const heading = headingDeg(from, to);
-    const n = 12;
+    const n = 6;
     for (let i = 1; i <= n; i++) {
       const d = (total * i) / n;
       const isEnd = i === n;
@@ -191,8 +200,15 @@ export default function StreetViewPanel({
       <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-2.5">
         <div className="pointer-events-none rounded-md border border-slate-600 bg-slate-900/90 px-2.5 py-1.5 text-[11px] leading-4 text-slate-300 shadow-lg">
           {cameraOffsetM < 1
-            ? "Standing at Point A (driver position)"
-            : `Standing ${cameraOffsetM.toFixed(0)} m along the line from A`}
+            ? "Aiming from Point A (driver position)"
+            : `Aiming from ${cameraOffsetM.toFixed(0)} m along the line from A`}
+          {snapDistM != null && snapDistM > 2 && (
+            <span className="text-amber-300">
+              {" "}
+              · camera ~{snapDistM.toFixed(0)} m away (nearest Street View on the
+              road)
+            </span>
+          )}
           <span className="mx-1 text-slate-600">·</span>
           {date ? (
             <span className={date.stale ? "text-amber-300" : "text-slate-400"}>
@@ -204,8 +220,9 @@ export default function StreetViewPanel({
             <span className="text-slate-500">Imagery date unavailable</span>
           ) : null}
         </div>
-        <div className="pointer-events-none rounded-md border border-slate-700 bg-slate-900/80 px-2.5 py-1.5 text-[11px] text-slate-400 shadow-lg">
-          Click the map along the sightline to move the camera
+        <div className="pointer-events-none max-w-[15rem] rounded-md border border-slate-700 bg-slate-900/80 px-2.5 py-1.5 text-[11px] leading-4 text-slate-400 shadow-lg">
+          Dots trace the ground toward the red Y marker — pan to it and check
+          nothing hides it. Drag rotates only; click the map to move.
         </div>
       </div>
 
