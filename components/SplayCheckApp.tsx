@@ -22,7 +22,7 @@ import { exportSplayPng } from "@/lib/export";
 import ControlPanel from "./ControlPanel";
 
 export type Step = "idle" | "mouth" | "origin" | "left" | "right" | "done";
-export type Mode = "points" | "guided";
+export type Mode = "manual" | "auto";
 type VertexKey = "mouth" | "origin" | "left" | "right";
 
 export interface SplayResults {
@@ -90,7 +90,7 @@ export default function SplayCheckApp() {
   const searchInitRef = useRef(false);
 
   const [mapReady, setMapReady] = useState(false);
-  const [mode, setMode] = useState<Mode>("points");
+  const [mode, setMode] = useState<Mode>("manual");
   const [step, setStep] = useState<Step>("idle");
   const [snapToX, setSnapToX] = useState(true);
   const [points, setPoints] = useState<SplayPoints>(EMPTY_POINTS);
@@ -154,7 +154,7 @@ export default function SplayCheckApp() {
           ? offsetM(mouth, live.params.xDistance, headingDeg(mouth, pos))
           : pos;
         clearGhost();
-        if (live.mode === "guided") {
+        if (live.mode === "auto") {
           // Auto-place both Y handles at the required distance, perpendicular
           // to the minor arm — the engineer then drags them along the road.
           const toMouth = headingDeg(origin, mouth);
@@ -427,7 +427,24 @@ export default function SplayCheckApp() {
         m = new google.maps.Marker({ map, draggable: true, cursor: "move" });
         m.addListener("drag", (e: google.maps.MapMouseEvent) => {
           if (!e.latLng) return;
-          const pos = e.latLng.toJSON();
+          let pos = e.latLng.toJSON();
+          const live = liveRef.current;
+          // Automatic mode: lock the Y handles to the required distance so the
+          // engineer can slide them onto the kerb without changing Y. The
+          // handle is constrained to the arc of radius = required Y about the
+          // junction mouth; only its bearing follows the cursor.
+          if (
+            (key === "left" || key === "right") &&
+            live.mode === "auto" &&
+            live.points.mouth
+          ) {
+            pos = offsetM(
+              live.points.mouth,
+              live.params.yRequired,
+              headingDeg(live.points.mouth, pos)
+            );
+            m!.setPosition(pos); // pin the marker onto the locked arc each frame
+          }
           setPoints((prev) => ({ ...prev, [key]: pos }));
         });
         markersRef.current[key] = m;

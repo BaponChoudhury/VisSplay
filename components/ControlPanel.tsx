@@ -129,18 +129,24 @@ export default function ControlPanel(props: Props) {
           <div className={headingCls}>Draw splay</div>
           <div className="flex gap-2">
             <button
-              className={`${btnPrimary} flex-1`}
+              className={`${
+                props.mode === "manual" && drawing ? btnPrimary : btnSecondary
+              } flex-1`}
               disabled={props.mapsStatus !== "ready"}
-              onClick={() => props.onStartDrawing("points")}
+              onClick={() => props.onStartDrawing("manual")}
+              title="Place every point yourself to measure the achieved sightline"
             >
-              3-point mode
+              Manual
             </button>
             <button
-              className={`${btnPrimary} flex-1`}
+              className={`${
+                props.mode === "auto" && drawing ? btnPrimary : btnSecondary
+              } flex-1`}
               disabled={props.mapsStatus !== "ready"}
-              onClick={() => props.onStartDrawing("guided")}
+              onClick={() => props.onStartDrawing("auto")}
+              title="App draws both Y legs at the required distance; drag onto the kerb with Y locked"
             >
-              Guided mode
+              Automatic
             </button>
             <button className={btnSecondary} onClick={props.onReset}>
               Reset
@@ -155,12 +161,25 @@ export default function ControlPanel(props: Props) {
             />
             Snap Point A to exactly X m from junction mouth
           </label>
-          <p className="mt-1.5 text-xs leading-5 text-slate-500">
-            {props.mode === "guided"
-              ? "Guided: click junction mouth, then Point A — both Y handles are placed at the required distance for you to drag along the road."
-              : "3-point: click junction mouth, Point A, then B (left) and C (right) on the nearer kerb."}
-            {drawing && " · Esc cancels."}
-          </p>
+          <div className="mt-2 space-y-1.5 text-xs leading-5 text-slate-500">
+            <p>
+              <span className="font-semibold text-slate-300">Manual</span> —
+              you click all four points: junction mouth, Point A, then the left
+              (B) and right (C) Y points where the sightline actually reaches.
+              Handles drag freely, so Y is the{" "}
+              <span className="text-slate-300">achieved</span> distance and each
+              side reports pass/fail against the requirement.
+            </p>
+            <p>
+              <span className="font-semibold text-slate-300">Automatic</span> —
+              you click only the junction mouth and Point A. Both Y legs are
+              drawn at the{" "}
+              <span className="text-slate-300">required</span> distance; drag
+              each handle round onto the nearer kerb and the Y stays locked, so
+              you draw the exact required envelope to eyeball for obstructions.
+            </p>
+            {drawing && <p className="text-slate-400">Esc cancels · Enter confirms.</p>}
+          </div>
         </div>
 
         {/* Parameters */}
