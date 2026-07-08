@@ -52,6 +52,8 @@ interface Props {
   canInspect: boolean;
   svOpen: boolean;
   onInspect: () => void;
+  threeDOpen: boolean;
+  onInspect3D: () => void;
   saved: SavedAssessment[];
   currentId: string | null;
   onLoad: (id: string) => void;
@@ -480,11 +482,26 @@ export default function ControlPanel(props: Props) {
           >
             👁 Inspect in Street View
           </button>
+          <button
+            className={`${
+              props.threeDOpen ? btnPrimary : btnSecondary
+            } mt-2 w-full`}
+            disabled={!props.canInspect}
+            onClick={props.onInspect3D}
+            title={
+              props.canInspect
+                ? "3D driver's-eye view from the car at the X setback, at eye height, along the sightline"
+                : "Draw a splay (origin + at least one Y point) first"
+            }
+          >
+            🚗 3D driver’s-eye view
+          </button>
           {props.canInspect && (
             <p className="mt-1.5 text-xs leading-4 text-slate-500">
-              Opens beside the map at Point A, facing the Y point. Toggle
-              left/right, and click along the sightline on the map to move the
-              camera.
+              Both open beside the map at Point A, facing the Y point. Street
+              View snaps to the road at ~2.5 m; the 3D view puts the camera at
+              the car at your chosen eye height (1.05–2.0 m) so you can see if
+              the line of sight is clear along Y. Needs the Map Tiles API.
             </p>
           )}
         </div>

@@ -16,7 +16,7 @@ survey.
 3. In Google Cloud Console, enable on the key's project:
    - **Maps JavaScript API** (map, drawing, geometry, Street View)
    - **Places API (New)** (address/postcode search)
-   - **Map Tiles API** (Phase 3 — photorealistic 3D tiles; can wait)
+   - **Map Tiles API** (Phase 3 — 3D driver's-eye view / photorealistic tiles)
 4. `npm run dev` → http://localhost:3000
 
 ## Using the tool (Phase 1)
@@ -57,10 +57,27 @@ that the Street View camera (~2.5 m) sits well above driver eye height
 (1.05 m), and the imagery capture date is shown with a staleness warning when
 it is over two years old.
 
+## 3D driver's-eye view (Phase 3)
+
+**🚗 3D driver's-eye view** (Tools) opens a CesiumJS panel using Google
+Photorealistic 3D Tiles. The camera sits **at the vehicle — Point A (the X
+setback) — at the driver eye height** (1.05–2.0 m, from the Sightline heights
+control), looking along the active splay leg toward the Y point. The line of
+sight is drawn from the eye to Y, with a translucent red "curtain" from the
+object height up to 2.0 m along the leg, so you can see whether a hedge, fence
+or building intersects the sightline. Raising the eye height lifts the camera
+in place — it does not move the car. Toggle left/right leg, and switch between
+the **Driver eye** and **Orbit** presets. Clash judgement is visual in this
+phase.
+
+> Requires the **Map Tiles API** enabled on the Google key. Cesium's runtime
+> assets are copied to `public/cesium` automatically on `npm install`
+> (`npm run copy-cesium` to redo it).
+
 ## Roadmap
 
 - **Phase 1** — 2D map splay tool ✅
 - **Phase 2** — Street View sightline inspection ✅
-- **Phase 3** — 3D photorealistic tiles (CesiumJS) with sightline curtains
+- **Phase 3** — 3D photorealistic driver's-eye view (CesiumJS + Google 3D Tiles) ✅
 - **Phase 4** (future) — automated line-of-sight testing against Environment
   Agency LiDAR DSM

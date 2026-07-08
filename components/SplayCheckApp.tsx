@@ -29,8 +29,12 @@ import type {
 } from "@/lib/types";
 import { assessmentStore, newAssessmentId } from "@/lib/storage";
 import { exportSplayPng } from "@/lib/export";
+import dynamic from "next/dynamic";
 import ControlPanel from "./ControlPanel";
 import StreetViewPanel from "./StreetViewPanel";
+
+// Cesium is a large, browser-only library — code-split and load on demand.
+const Cesium3DPanel = dynamic(() => import("./Cesium3DPanel"), { ssr: false });
 
 export type Step = "idle" | "mouth" | "origin" | "left" | "right" | "done";
 export type Mode = "manual" | "auto";
@@ -87,6 +91,7 @@ const STEP_PROMPTS: Record<Step, string | null> = {
 
 export default function SplayCheckApp() {
   const mapsState = useGoogleMaps();
+  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
 
   const mapDivRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -118,8 +123,9 @@ export default function SplayCheckApp() {
   const [exporting, setExporting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
-  // Street View inspection (Phase 2).
+  // Street View inspection (Phase 2) and 3D driver's-eye view (Phase 3).
   const [svOpen, setSvOpen] = useState(false);
+  const [threeDOpen, setThreeDOpen] = useState(false);
   const [svSide, setSvSide] = useState<"left" | "right">("left");
   const [svCamera, setSvCamera] = useState<LatLng | null>(null);
   const [svOffsetM, setSvOffsetM] = useState(0);
@@ -134,6 +140,7 @@ export default function SplayCheckApp() {
     points,
     params,
     svOpen,
+    threeDOpen,
     svSide,
   });
   liveRef.current = {
@@ -144,6 +151,7 @@ export default function SplayCheckApp() {
     points,
     params,
     svOpen,
+    threeDOpen,
     svSide,
   };
 
@@ -627,7 +635,7 @@ export default function SplayCheckApp() {
       google.maps.event.trigger(map, "resize");
     }, 210);
     return () => window.clearTimeout(t);
-  }, [mapReady, svOpen]);
+  }, [mapReady, svOpen, threeDOpen]);
 
   // ------------------------------------------------------------- keyboard
   useEffect(() => {
@@ -646,6 +654,8 @@ export default function SplayCheckApp() {
         if (liveRef.current.svOpen) {
           setSvOpen(false);
           svCameraMarkerRef.current?.setMap(null);
+        } else if (liveRef.current.threeDOpen) {
+          setThreeDOpen(false);
         } else if (liveRef.current.measuring) {
           setMeasuring(false);
           clearMeasure();
@@ -683,6 +693,7 @@ export default function SplayCheckApp() {
     setCurrentId(null);
     setStep("mouth");
     setSvOpen(false);
+    setThreeDOpen(false);
     if (measuring) {
       setMeasuring(false);
       clearMeasure();
@@ -695,6 +706,7 @@ export default function SplayCheckApp() {
     setStep("idle");
     setCurrentId(null);
     setSvOpen(false);
+    setThreeDOpen(false);
   };
 
   // -------------------------------------------------------- street view
@@ -709,6 +721,7 @@ export default function SplayCheckApp() {
       setMeasuring(false);
       clearMeasure();
     }
+    setThreeDOpen(false);
     setSvOpen(true);
   };
 
@@ -727,6 +740,29 @@ export default function SplayCheckApp() {
     setSvOpen(false);
     svCameraMarkerRef.current?.setMap(null);
   };
+
+  // ----------------------------------------------------- 3D driver view
+  const open3D = () => {
+    const p = liveRef.current.points;
+    if (!p.origin || !(p.left || p.right)) return;
+    setSvSide(p[liveRef.current.svSide] ? liveRef.current.svSide : p.left ? "left" : "right");
+    setSvOpen(false);
+    svCameraMarkerRef.current?.setMap(null);
+    if (measuring) {
+      setMeasuring(false);
+      clearMeasure();
+    }
+    setThreeDOpen(true);
+  };
+
+  const switch3DSide = () => {
+    const p = liveRef.current.points;
+    const next = liveRef.current.svSide === "left" ? "right" : "left";
+    if (!p[next]) return;
+    setSvSide(next);
+  };
+
+  const close3D = () => setThreeDOpen(false);
 
   const toggleMeasure = () => {
     if (measuring) {
@@ -821,6 +857,7 @@ export default function SplayCheckApp() {
     if (!a || !map) return;
     clearGhost();
     setSvOpen(false);
+    setThreeDOpen(false);
     if (measuring) {
       setMeasuring(false);
       clearMeasure();
@@ -928,6 +965,8 @@ export default function SplayCheckApp() {
         canInspect={!!(points.origin && (points.left || points.right))}
         svOpen={svOpen}
         onInspect={openStreetView}
+        threeDOpen={threeDOpen}
+        onInspect3D={open3D}
         saved={saved}
         currentId={currentId}
         onLoad={(id) => void loadAssessment(id)}
@@ -982,6 +1021,26 @@ export default function SplayCheckApp() {
             />
           </div>
         )}
+
+        {threeDOpen &&
+          points.origin &&
+          (points.left || points.right) &&
+          apiKey && (
+            <div className="min-w-0 flex-1 border-l border-slate-700">
+              <Cesium3DPanel
+                apiKey={apiKey}
+                origin={points.origin}
+                left={points.left}
+                right={points.right}
+                side={svSide}
+                eyeHeight={params.eyeHeight}
+                objectHeight={params.objectHeight}
+                requiredY={params.yRequired}
+                onSwitchSide={switch3DSide}
+                onClose={close3D}
+              />
+            </div>
+          )}
       </div>
     </div>
   );
