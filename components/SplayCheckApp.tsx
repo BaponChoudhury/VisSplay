@@ -2,13 +2,19 @@
 
 /**
  * SplayCheck main app: Google Map, splay drawing state machine, measurement
- * tool, save/load and PNG export. All standards values come from
- * lib/standards.ts — nothing is hardcoded here.
+ * tool, save/load, PNG export and the Street View sightline inspector
+ * (Phase 2). All standards values come from lib/standards.ts — nothing is
+ * hardcoded here.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useGoogleMaps } from "@/lib/useGoogleMaps";
-import { distanceM, headingDeg, offsetM } from "@/lib/geo";
+import {
+  distanceM,
+  headingDeg,
+  offsetM,
+  projectOntoSegment,
+} from "@/lib/geo";
 import { ssdForSpeed } from "@/lib/standards";
 import type {
   LatLng,
@@ -20,6 +26,7 @@ import type {
 import { assessmentStore, newAssessmentId } from "@/lib/storage";
 import { exportSplayPng } from "@/lib/export";
 import ControlPanel from "./ControlPanel";
+import StreetViewPanel from "./StreetViewPanel";
 
 export type Step = "idle" | "mouth" | "origin" | "left" | "right" | "done";
 export type Mode = "manual" | "auto";
@@ -105,9 +112,34 @@ export default function SplayCheckApp() {
   const [exporting, setExporting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
+  // Street View inspection (Phase 2).
+  const [svOpen, setSvOpen] = useState(false);
+  const [svSide, setSvSide] = useState<"left" | "right">("left");
+  const [svCamera, setSvCamera] = useState<LatLng | null>(null);
+  const [svOffsetM, setSvOffsetM] = useState(0);
+  const svCameraMarkerRef = useRef<google.maps.Marker | null>(null);
+
   // Latest-state ref so persistent map listeners never see stale closures.
-  const liveRef = useRef({ step, mode, lockDistances, measuring, points, params });
-  liveRef.current = { step, mode, lockDistances, measuring, points, params };
+  const liveRef = useRef({
+    step,
+    mode,
+    lockDistances,
+    measuring,
+    points,
+    params,
+    svOpen,
+    svSide,
+  });
+  liveRef.current = {
+    step,
+    mode,
+    lockDistances,
+    measuring,
+    points,
+    params,
+    svOpen,
+    svSide,
+  };
 
   // ---------------------------------------------------------------- results
   const results: SplayResults = useMemo(() => {
@@ -132,6 +164,20 @@ export default function SplayCheckApp() {
   // ------------------------------------------------------------ map clicks
   const handleMapClick = useCallback((pos: LatLng) => {
     const live = liveRef.current;
+
+    // Street View open: a map click drops the camera in along the active
+    // sightline, snapped to the A→Y segment and facing the Y point.
+    if (live.svOpen) {
+      const target =
+        live.svSide === "left" ? live.points.left : live.points.right;
+      const origin = live.points.origin;
+      if (origin && target) {
+        const proj = projectOntoSegment(origin, target, pos);
+        setSvCamera(proj.point);
+        setSvOffsetM(proj.alongM);
+      }
+      return;
+    }
 
     if (live.measuring) {
       const pts = measurePtsRef.current;
@@ -540,6 +586,43 @@ export default function SplayCheckApp() {
     });
   }, [mapReady, points, params.yRequired]);
 
+  // ----------------------------------------- street view camera marker
+  const svTarget = svSide === "left" ? points.left : points.right;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map) return;
+    if (!svOpen || !svCamera || !svTarget) {
+      svCameraMarkerRef.current?.setMap(null);
+      return;
+    }
+    let m = svCameraMarkerRef.current;
+    if (!m) {
+      m = new google.maps.Marker({ clickable: false, zIndex: 40 });
+      svCameraMarkerRef.current = m;
+    }
+    m.setMap(map);
+    m.setPosition(svCamera);
+    m.setIcon({
+      path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+      scale: 5,
+      fillColor: "#38bdf8",
+      fillOpacity: 1,
+      strokeColor: "#ffffff",
+      strokeWeight: 1.5,
+      rotation: headingDeg(svCamera, svTarget),
+    });
+  }, [mapReady, svOpen, svCamera, svTarget]);
+
+  // Google Maps needs a resize nudge when the split layout changes width.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map) return;
+    const t = window.setTimeout(() => {
+      google.maps.event.trigger(map, "resize");
+    }, 210);
+    return () => window.clearTimeout(t);
+  }, [mapReady, svOpen]);
+
   // ------------------------------------------------------------- keyboard
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -554,7 +637,10 @@ export default function SplayCheckApp() {
         return;
 
       if (e.key === "Escape") {
-        if (liveRef.current.measuring) {
+        if (liveRef.current.svOpen) {
+          setSvOpen(false);
+          svCameraMarkerRef.current?.setMap(null);
+        } else if (liveRef.current.measuring) {
           setMeasuring(false);
           clearMeasure();
         } else if (
@@ -590,6 +676,7 @@ export default function SplayCheckApp() {
     setPoints(EMPTY_POINTS);
     setCurrentId(null);
     setStep("mouth");
+    setSvOpen(false);
     if (measuring) {
       setMeasuring(false);
       clearMeasure();
@@ -601,6 +688,38 @@ export default function SplayCheckApp() {
     setPoints(EMPTY_POINTS);
     setStep("idle");
     setCurrentId(null);
+    setSvOpen(false);
+  };
+
+  // -------------------------------------------------------- street view
+  const openStreetView = () => {
+    const p = liveRef.current.points;
+    if (!p.origin || !(p.left || p.right)) return;
+    const side: "left" | "right" = p.left ? "left" : "right";
+    setSvSide(side);
+    setSvCamera(p.origin);
+    setSvOffsetM(0);
+    if (measuring) {
+      setMeasuring(false);
+      clearMeasure();
+    }
+    setSvOpen(true);
+  };
+
+  const switchStreetViewSide = () => {
+    const p = liveRef.current.points;
+    const next = liveRef.current.svSide === "left" ? "right" : "left";
+    if (!p[next]) return; // no handle on that side
+    setSvSide(next);
+    if (p.origin) {
+      setSvCamera(p.origin); // reset the camera back to Point A on the new leg
+      setSvOffsetM(0);
+    }
+  };
+
+  const closeStreetView = () => {
+    setSvOpen(false);
+    svCameraMarkerRef.current?.setMap(null);
   };
 
   const toggleMeasure = () => {
@@ -698,6 +817,7 @@ export default function SplayCheckApp() {
     const map = mapRef.current;
     if (!a || !map) return;
     clearGhost();
+    setSvOpen(false);
     if (measuring) {
       setMeasuring(false);
       clearMeasure();
@@ -797,13 +917,17 @@ export default function SplayCheckApp() {
         }
         exporting={exporting}
         onExport={() => void doExport()}
+        canInspect={!!(points.origin && (points.left || points.right))}
+        svOpen={svOpen}
+        onInspect={openStreetView}
         saved={saved}
         currentId={currentId}
         onLoad={(id) => void loadAssessment(id)}
         onDelete={(id) => void deleteAssessment(id)}
       />
 
-      <div className="relative min-w-0 flex-1">
+      <div className="flex min-w-0 flex-1">
+        <div className="relative min-w-0 flex-1">
         <div ref={mapDivRef} className="h-full w-full" />
 
         {mapsState.status === "loading" && (
@@ -832,6 +956,21 @@ export default function SplayCheckApp() {
         {notice && (
           <div className="splaycheck-no-export absolute bottom-6 left-1/2 z-10 -translate-x-1/2 rounded-lg border border-slate-600 bg-slate-800 px-4 py-2 text-sm text-slate-100 shadow-xl">
             {notice}
+          </div>
+        )}
+        </div>
+
+        {svOpen && svCamera && svTarget && points.origin && (
+          <div className="min-w-0 flex-1 border-l border-slate-700">
+            <StreetViewPanel
+              cameraLocation={svCamera}
+              target={svTarget}
+              side={svSide}
+              requiredY={params.yRequired}
+              cameraOffsetM={svOffsetM}
+              onSwitchSide={switchStreetViewSide}
+              onClose={closeStreetView}
+            />
           </div>
         )}
       </div>

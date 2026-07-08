@@ -48,6 +48,9 @@ interface Props {
   canExport: boolean;
   exporting: boolean;
   onExport: () => void;
+  canInspect: boolean;
+  svOpen: boolean;
+  onInspect: () => void;
   saved: SavedAssessment[];
   currentId: string | null;
   onLoad: (id: string) => void;
@@ -433,6 +436,27 @@ export default function ControlPanel(props: Props) {
               {props.measureDist != null
                 ? `Distance: ${props.measureDist.toFixed(2)} m`
                 : "Click two points on the map."}
+            </p>
+          )}
+          <button
+            className={`${
+              props.svOpen ? btnPrimary : btnSecondary
+            } mt-2 w-full`}
+            disabled={!props.canInspect}
+            onClick={props.onInspect}
+            title={
+              props.canInspect
+                ? "Open Street View at Point A looking down the splay"
+                : "Draw a splay (origin + at least one Y point) first"
+            }
+          >
+            👁 Inspect in Street View
+          </button>
+          {props.canInspect && (
+            <p className="mt-1.5 text-xs leading-4 text-slate-500">
+              Opens beside the map at Point A, facing the Y point. Toggle
+              left/right, and click along the sightline on the map to move the
+              camera.
             </p>
           )}
         </div>

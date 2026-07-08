@@ -45,10 +45,22 @@ survey.
 - `lib/export.ts` — PNG export (html2canvas capture + vector redraw +
   parameters block).
 
+## Street View inspection (Phase 2)
+
+Once a splay is drawn, **Inspect in Street View** (Tools) opens a panorama
+beside the map at Point A, facing the Y point, with the sightline overlaid as
+a receding trail of markers to the Y endpoint so you can pan and judge whether
+a hedge / fence / building cuts the line. Toggle the left/right leg, and click
+anywhere along the sightline on the map to move the camera to the nearest
+panorama (it snaps to the A→Y line and keeps facing Y). A persistent chip warns
+that the Street View camera (~2.5 m) sits well above driver eye height
+(1.05 m), and the imagery capture date is shown with a staleness warning when
+it is over two years old.
+
 ## Roadmap
 
 - **Phase 1** — 2D map splay tool ✅
-- **Phase 2** — Street View sightline inspection
+- **Phase 2** — Street View sightline inspection ✅
 - **Phase 3** — 3D photorealistic tiles (CesiumJS) with sightline curtains
 - **Phase 4** (future) — automated line-of-sight testing against Environment
   Agency LiDAR DSM
