@@ -11,7 +11,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { LatLng } from "@/lib/types";
 import { distanceM, headingDeg, offsetM, parseImageDate } from "@/lib/geo";
-import { DRIVER_EYE_HEIGHT_M } from "@/lib/standards";
 
 interface Props {
   /** Where the camera stands — Point A initially, or a point clicked along the line. */
@@ -20,6 +19,8 @@ interface Props {
   target: LatLng;
   side: "left" | "right";
   requiredY: number;
+  /** Driver eye height, metres (for the camera-height caveat). */
+  eyeHeight: number;
   /** How far the camera currently is from Point A, along the line (m). */
   cameraOffsetM: number;
   onSwitchSide: () => void;
@@ -34,6 +35,7 @@ export default function StreetViewPanel({
   target,
   side,
   requiredY,
+  eyeHeight,
   cameraOffsetM,
   onSwitchSide,
   onClose,
@@ -181,7 +183,7 @@ export default function StreetViewPanel({
       <div className="pointer-events-none absolute inset-x-0 top-14 flex justify-center px-2.5">
         <div className="max-w-md rounded-md border border-amber-500/50 bg-amber-950/85 px-3 py-1.5 text-center text-xs leading-4 text-amber-200 shadow-lg">
           Street View camera height ≈ 2.5 m vs driver eye height{" "}
-          {DRIVER_EYE_HEIGHT_M} m — obstructions may be worse at eye level.
+          {eyeHeight.toFixed(2)} m — obstructions may be worse at eye level.
         </div>
       </div>
 

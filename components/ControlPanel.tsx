@@ -9,12 +9,13 @@
 import { useState } from "react";
 import type { SavedAssessment, SplayParams, StandardId } from "@/lib/types";
 import {
-  DRIVER_EYE_HEIGHT_M,
+  DRIVER_EYE_HEIGHT_RANGE_M,
   EXPORT_DISCLAIMER,
   OBJECT_HEIGHT_MAX_M,
-  OBJECT_HEIGHT_MIN_M,
+  OBJECT_HEIGHT_RANGE_M,
   STANDARD_LABELS,
   X_DISTANCE_OPTIONS,
+  clamp,
   kphToMph,
   mphToKph,
   ssdForSpeed,
@@ -412,6 +413,32 @@ export default function ControlPanel(props: Props) {
           </p>
         </div>
 
+        {/* Sightline heights */}
+        <div className={sectionCls}>
+          <div className={headingCls}>Sightline heights</div>
+          <HeightControl
+            label="Driver eye height"
+            value={params.eyeHeight}
+            min={DRIVER_EYE_HEIGHT_RANGE_M[0]}
+            max={DRIVER_EYE_HEIGHT_RANGE_M[1]}
+            onChange={(v) => onUpdateParams({ eyeHeight: v })}
+          />
+          <HeightControl
+            label="Object height"
+            value={params.objectHeight}
+            min={OBJECT_HEIGHT_RANGE_M[0]}
+            max={OBJECT_HEIGHT_RANGE_M[1]}
+            onChange={(v) => onUpdateParams({ objectHeight: v })}
+          />
+          <p className="mt-2 text-xs leading-5 text-slate-500">
+            An obstruction matters if it intrudes into the splay between the
+            object height ({params.objectHeight.toFixed(2)} m) and{" "}
+            {OBJECT_HEIGHT_MAX_M.toFixed(1)} m above the carriageway, seen from
+            the driver eye height ({params.eyeHeight.toFixed(2)} m). These drive
+            the Street View caveat and the export summary.
+          </p>
+        </div>
+
         {/* Tools */}
         <div className={sectionCls}>
           <div className={headingCls}>Tools</div>
@@ -551,11 +578,62 @@ export default function ControlPanel(props: Props) {
 
         {/* Footer */}
         <div className="px-4 py-3.5 text-[11px] leading-5 text-slate-600">
-          Driver eye height {DRIVER_EYE_HEIGHT_M} m · obstruction envelope{" "}
-          {OBJECT_HEIGHT_MIN_M}–{OBJECT_HEIGHT_MAX_M} m above carriageway.
-          Standards values are provisional — verify against MfS Table 7.1 and
-          DMRB CD 109 before relying on results.
+          Obstruction envelope {params.objectHeight.toFixed(2)}–
+          {OBJECT_HEIGHT_MAX_M.toFixed(1)} m above carriageway, eye height{" "}
+          {params.eyeHeight.toFixed(2)} m. Standards values are provisional —
+          verify against MfS Table 7.1 and DMRB CD 109 before relying on
+          results.
         </div>
+      </div>
+    </div>
+  );
+}
+
+function HeightControl({
+  label,
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (v: number) => void;
+}) {
+  const set = (raw: number) => {
+    if (Number.isFinite(raw)) onChange(clamp(Math.round(raw * 100) / 100, min, max));
+  };
+  return (
+    <div className="mb-2.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-slate-400">{label}</span>
+        <div className="flex items-center gap-1">
+          <input
+            type="number"
+            min={min}
+            max={max}
+            step={0.01}
+            value={value}
+            onChange={(e) => set(Number(e.target.value))}
+            className="w-16 rounded-md border border-slate-700 bg-slate-800 px-1.5 py-1 text-right text-sm text-slate-100 focus:border-sky-500 focus:outline-none"
+          />
+          <span className="text-xs text-slate-500">m</span>
+        </div>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={0.01}
+        value={value}
+        onChange={(e) => set(Number(e.target.value))}
+        className="mt-1 w-full accent-sky-500"
+      />
+      <div className="flex justify-between text-[10px] text-slate-600">
+        <span>{min.toFixed(2)} m</span>
+        <span>{max.toFixed(2)} m</span>
       </div>
     </div>
   );

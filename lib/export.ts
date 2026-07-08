@@ -101,7 +101,7 @@ export async function exportSplayPng(opts: {
 
   const mapW = capture.width;
   const mapH = capture.height;
-  const blockH = 210;
+  const blockH = 232;
 
   const out = document.createElement("canvas");
   out.width = mapW;
@@ -179,6 +179,12 @@ export async function exportSplayPng(opts: {
     ],
     ["X distance", `${params.xDistance.toFixed(1)} m`],
     ["Y required (SSD)", `${params.yRequired.toFixed(1)} m each side`],
+    [
+      "Eye / object height",
+      `${params.eyeHeight.toFixed(2)} m eye · obstruction ${params.objectHeight.toFixed(
+        2
+      )}–2.0 m`,
+    ],
     [
       "Y achieved — left (B)",
       `${fmt(results.yLeft)}  ${passTxt(results.passLeft)}`,

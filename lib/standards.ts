@@ -129,16 +129,28 @@ export const X_DISTANCE_OPTIONS: XOption[] = [
   },
 ];
 
-/** Driver eye height, metres (MfS; permissible range 1.05–2.0 m). */
+/**
+ * Driver eye height, metres. MfS default 1.05 m; adjustable up to 2.0 m
+ * (e.g. HGV / LGV driver eye position). User-overridable in the UI.
+ */
 export const DRIVER_EYE_HEIGHT_M = 1.05;
 export const DRIVER_EYE_HEIGHT_RANGE_M: [number, number] = [1.05, 2.0];
 
 /**
- * Object height envelope: an obstruction matters if it intrudes into the
- * splay between these heights above the carriageway.
+ * Object (obstruction) height envelope: an obstruction matters if it intrudes
+ * into the splay between the object height and 2.0 m above the carriageway.
+ * The lower object height is the assessment threshold — MfS/DMRB commonly use
+ * 0.6 m, but it is adjustable down to 0.26 m for low-obstruction checks
+ * (e.g. against a low child's-eye / low-object criterion). User-overridable.
  */
-export const OBJECT_HEIGHT_MIN_M = 0.6;
+export const OBJECT_HEIGHT_DEFAULT_M = 0.6;
+export const OBJECT_HEIGHT_RANGE_M: [number, number] = [0.26, 2.0];
 export const OBJECT_HEIGHT_MAX_M = 2.0;
+
+/** Clamp a value into [min, max]. */
+export function clamp(v: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, v));
+}
 
 export const STANDARD_LABELS: Record<StandardId, string> = {
   mfs: "MfS",

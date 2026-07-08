@@ -20,6 +20,10 @@ export interface SplayParams {
   yRequired: number;
   /** True when the engineer has typed a custom Y rather than using the table. */
   yOverridden: boolean;
+  /** Driver eye height, metres (1.05–2.0). */
+  eyeHeight: number;
+  /** Lower object/obstruction height threshold, metres (0.26–2.0). */
+  objectHeight: number;
 }
 
 /**

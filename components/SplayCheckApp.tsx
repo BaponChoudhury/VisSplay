@@ -15,7 +15,11 @@ import {
   offsetM,
   projectOntoSegment,
 } from "@/lib/geo";
-import { ssdForSpeed } from "@/lib/standards";
+import {
+  DRIVER_EYE_HEIGHT_M,
+  OBJECT_HEIGHT_DEFAULT_M,
+  ssdForSpeed,
+} from "@/lib/standards";
 import type {
   LatLng,
   SavedAssessment,
@@ -45,6 +49,8 @@ const DEFAULT_PARAMS: SplayParams = {
   xDistance: 2.4,
   yRequired: 43, // matches MfS table for 48 kph; kept in sync via ssdForSpeed
   yOverridden: false,
+  eyeHeight: DRIVER_EYE_HEIGHT_M,
+  objectHeight: OBJECT_HEIGHT_DEFAULT_M,
 };
 
 const EMPTY_POINTS: SplayPoints = {
@@ -822,7 +828,12 @@ export default function SplayCheckApp() {
       setMeasuring(false);
       clearMeasure();
     }
-    setParams(a.params);
+    // Backfill height fields for assessments saved before they existed.
+    setParams({
+      ...a.params,
+      eyeHeight: a.params.eyeHeight ?? DRIVER_EYE_HEIGHT_M,
+      objectHeight: a.params.objectHeight ?? OBJECT_HEIGHT_DEFAULT_M,
+    });
     setPoints(a.points);
     setSiteName(a.name);
     setCurrentId(a.id);
@@ -967,6 +978,7 @@ export default function SplayCheckApp() {
               target={svTarget}
               side={svSide}
               requiredY={params.yRequired}
+              eyeHeight={params.eyeHeight}
               cameraOffsetM={svOffsetM}
               onSwitchSide={switchStreetViewSide}
               onClose={closeStreetView}
