@@ -202,12 +202,12 @@ export default function SplayCheckApp() {
       case "origin": {
         const mouth = live.points.mouth;
         if (!mouth) return;
-        // With the lock on, snap A to exactly X back along the cursor
-        // direction; otherwise place it free (Manual measures achieved X).
-        const origin =
-          live.lockDistances && live.mode === "auto"
-            ? offsetM(mouth, live.params.xDistance, headingDeg(mouth, pos))
-            : pos;
+        // Point A is the driver position — always the X setback back from the
+        // junction mouth. With the lock on (either mode) snap it to exactly X
+        // along the cursor direction; unlock only to nudge it off X.
+        const origin = live.lockDistances
+          ? offsetM(mouth, live.params.xDistance, headingDeg(mouth, pos))
+          : pos;
         clearGhost();
         if (live.mode === "auto") {
           // Auto-place both Y handles at the required distance, perpendicular
@@ -250,10 +250,9 @@ export default function SplayCheckApp() {
       return;
     }
     const mouth = live.points.mouth;
-    const ghost =
-      live.lockDistances && live.mode === "auto"
-        ? offsetM(mouth, live.params.xDistance, headingDeg(mouth, pos))
-        : pos;
+    const ghost = live.lockDistances
+      ? offsetM(mouth, live.params.xDistance, headingDeg(mouth, pos))
+      : pos;
 
     if (!ghostMarkerRef.current) {
       ghostMarkerRef.current = new google.maps.Marker({
@@ -485,18 +484,19 @@ export default function SplayCheckApp() {
           if (!e.latLng) return;
           let pos = e.latLng.toJSON();
           const live = liveRef.current;
-          // Automatic mode with the lock on: constrain the point to the arc of
-          // its required distance about the junction mouth (X for Point A,
-          // required Y for the left/right handles) so the engineer can slide it
-          // onto the centreline / kerb without the distance changing — only the
-          // bearing follows the cursor. Unlock (or Manual mode) to drag freely
-          // and adjust the actual distance.
+          // With the lock on, constrain a handle to the arc of its required
+          // distance about the junction mouth so it can be slid onto the
+          // centreline / kerb without the distance changing — only the bearing
+          // follows the cursor. Point A (driver) locks to X in BOTH modes; the
+          // Y handles lock to the required Y in Automatic mode only (in Manual
+          // they stay free to record the achieved sightline). Unlock to drag
+          // freely and adjust the actual distance.
           const mouth = live.points.mouth;
-          if (mouth && live.mode === "auto" && live.lockDistances) {
+          if (mouth && live.lockDistances) {
             const lockedDist =
               key === "origin"
                 ? live.params.xDistance
-                : key === "left" || key === "right"
+                : (key === "left" || key === "right") && live.mode === "auto"
                   ? live.params.yRequired
                   : null;
             if (lockedDist != null) {
@@ -749,28 +749,12 @@ export default function SplayCheckApp() {
     }
     setParams(next);
 
-    // Only re-snap the drawn envelope when the lock is on in Automatic mode.
-    // In Manual mode (or with the lock off) the placed points represent the
-    // achieved geometry, so a parameter change must not move them — it just
-    // updates the requirement the results are compared against.
-    if (liveRef.current.mode !== "auto" || !liveRef.current.lockDistances)
-      return;
+    // With the lock off, placed points are the achieved geometry — a parameter
+    // change must not move them, it only updates the requirement.
+    if (!liveRef.current.lockDistances) return;
 
-    // Picking a different major-road speed changes the required Y: snap both Y
-    // handles out to the new distance along their current bearing from the
-    // junction mouth (preserving the direction the engineer set onto the kerb).
-    if (next.yRequired !== prev.yRequired) {
-      setPoints((pts) => {
-        const m = pts.mouth;
-        if (!m || (!pts.left && !pts.right)) return pts;
-        const snap = (h: LatLng | null) =>
-          h ? offsetM(m, next.yRequired, headingDeg(m, h)) : h;
-        return { ...pts, left: snap(pts.left), right: snap(pts.right) };
-      });
-    }
-
-    // Likewise, changing the X setback repositions Point A to the new X along
-    // its current bearing from the junction mouth.
+    // Point A is always the X setback, so changing X repositions it along its
+    // current bearing from the mouth — in either mode.
     if (next.xDistance !== prev.xDistance) {
       setPoints((pts) => {
         const m = pts.mouth;
@@ -779,6 +763,19 @@ export default function SplayCheckApp() {
           ...pts,
           origin: offsetM(m, next.xDistance, headingDeg(m, pts.origin)),
         };
+      });
+    }
+
+    // The Y legs track the required Y only in Automatic mode (in Manual they
+    // are the achieved sightline and must not move). Picking a different speed
+    // snaps both handles out to the new distance along their current bearing.
+    if (liveRef.current.mode === "auto" && next.yRequired !== prev.yRequired) {
+      setPoints((pts) => {
+        const m = pts.mouth;
+        if (!m || (!pts.left && !pts.right)) return pts;
+        const snap = (h: LatLng | null) =>
+          h ? offsetM(m, next.yRequired, headingDeg(m, h)) : h;
+        return { ...pts, left: snap(pts.left), right: snap(pts.right) };
       });
     }
   };

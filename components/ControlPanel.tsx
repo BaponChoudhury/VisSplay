@@ -173,10 +173,10 @@ export default function ControlPanel(props: Props) {
           <div className="mt-2 space-y-1.5 text-xs leading-5 text-slate-500">
             <p>
               <span className="font-semibold text-slate-300">Manual</span> —
-              you click all four points: junction mouth, Point A, then the left
-              (B) and right (C) Y points where the sightline actually reaches.
-              Every handle drags freely, so X and Y are the{" "}
-              <span className="text-slate-300">achieved</span> distances and each
+              you click the junction mouth, Point A (the driver, kept X back),
+              then the left (B) and right (C) Y points where the sightline
+              actually reaches. B and C drag freely, so Y is the{" "}
+              <span className="text-slate-300">achieved</span> distance and each
               side reports pass/fail against the requirement.
             </p>
             <p>
@@ -186,13 +186,14 @@ export default function ControlPanel(props: Props) {
               <span className="text-slate-300">required</span> distance.
             </p>
             <p>
-              With{" "}
-              <span className="text-slate-300">Lock</span> on (default),
-              dragging any handle keeps its distance fixed and only swings the
-              direction — slide Point A onto the minor-arm centreline and each Y
-              handle onto the nearer kerb without X or Y drifting. Turn{" "}
-              <span className="text-slate-300">Lock</span> off to drag freely and
-              adjust the X and Y distances themselves.
+              With <span className="text-slate-300">Lock</span> on (default),
+              Point A stays exactly X back from the mouth (both modes) and, in
+              Automatic, the Y legs stay at the required distance — dragging a
+              handle only swings its direction, so you slide A onto the
+              minor-arm centreline and each Y handle onto the nearer kerb
+              without the distance drifting. Turn{" "}
+              <span className="text-slate-300">Lock</span> off to drag freely
+              and adjust the actual distances.
             </p>
             {drawing && <p className="text-slate-400">Esc cancels · Enter confirms.</p>}
           </div>
