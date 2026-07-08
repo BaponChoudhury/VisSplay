@@ -590,16 +590,30 @@ export default function SplayCheckApp() {
   };
 
   const updateParams = (patch: Partial<SplayParams>) => {
-    setParams((prev) => {
-      const next = { ...prev, ...patch };
-      // Re-derive Y from the lookup table unless the engineer overrode it or
-      // is in manual mode.
-      if (!next.yOverridden && next.standard !== "manual") {
-        const r = ssdForSpeed(next.standard, next.speedKph);
-        if (r) next.yRequired = r.ssd;
-      }
-      return next;
-    });
+    const prev = liveRef.current.params;
+    const next = { ...prev, ...patch };
+    // Re-derive Y from the lookup table unless the engineer overrode it or is
+    // in manual mode.
+    if (!next.yOverridden && next.standard !== "manual") {
+      const r = ssdForSpeed(next.standard, next.speedKph);
+      if (r) next.yRequired = r.ssd;
+    }
+    setParams(next);
+
+    // When the required Y changes (e.g. the engineer picks a different major-
+    // road speed), snap both placed Y handles out to the new required distance
+    // along their current bearing from the junction mouth. The handles stay
+    // draggable, so the engineer can then pull each one back to a real
+    // obstruction to record the achieved sightline.
+    if (next.yRequired !== prev.yRequired) {
+      setPoints((pts) => {
+        const m = pts.mouth;
+        if (!m || (!pts.left && !pts.right)) return pts;
+        const snap = (h: LatLng | null) =>
+          h ? offsetM(m, next.yRequired, headingDeg(m, h)) : h;
+        return { ...pts, left: snap(pts.left), right: snap(pts.right) };
+      });
+    }
   };
 
   const refreshSaved = useCallback(async () => {
