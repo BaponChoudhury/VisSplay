@@ -29,8 +29,8 @@ interface Props {
   mapsStatus: string;
   mode: Mode;
   step: Step;
-  snapToX: boolean;
-  onSnapToX: (v: boolean) => void;
+  lockDistances: boolean;
+  onLockDistances: (v: boolean) => void;
   onStartDrawing: (mode: Mode) => void;
   onReset: () => void;
   params: SplayParams;
@@ -152,31 +152,43 @@ export default function ControlPanel(props: Props) {
               Reset
             </button>
           </div>
-          <label className="mt-2.5 flex items-center gap-2 text-sm text-slate-300">
+          <label
+            className={`mt-2.5 flex items-center gap-2 text-sm ${
+              props.mode === "auto" ? "text-slate-300" : "text-slate-600"
+            }`}
+            title="Automatic mode only"
+          >
             <input
               type="checkbox"
-              checked={props.snapToX}
-              onChange={(e) => props.onSnapToX(e.target.checked)}
+              checked={props.lockDistances}
+              onChange={(e) => props.onLockDistances(e.target.checked)}
               className="accent-sky-500"
             />
-            Snap Point A to exactly X m from junction mouth
+            Lock to standard X &amp; Y distances
           </label>
           <div className="mt-2 space-y-1.5 text-xs leading-5 text-slate-500">
             <p>
               <span className="font-semibold text-slate-300">Manual</span> —
               you click all four points: junction mouth, Point A, then the left
               (B) and right (C) Y points where the sightline actually reaches.
-              Handles drag freely, so Y is the{" "}
-              <span className="text-slate-300">achieved</span> distance and each
+              Every handle drags freely, so X and Y are the{" "}
+              <span className="text-slate-300">achieved</span> distances and each
               side reports pass/fail against the requirement.
             </p>
             <p>
               <span className="font-semibold text-slate-300">Automatic</span> —
-              you click only the junction mouth and Point A. Both Y legs are
-              drawn at the{" "}
-              <span className="text-slate-300">required</span> distance; drag
-              each handle round onto the nearer kerb and the Y stays locked, so
-              you draw the exact required envelope to eyeball for obstructions.
+              you click only the junction mouth and Point A. Point A sits X back
+              and both Y legs are drawn at the{" "}
+              <span className="text-slate-300">required</span> distance.
+            </p>
+            <p>
+              With{" "}
+              <span className="text-slate-300">Lock</span> on (default),
+              dragging any handle keeps its distance fixed and only swings the
+              direction — slide Point A onto the minor-arm centreline and each Y
+              handle onto the nearer kerb without X or Y drifting. Turn{" "}
+              <span className="text-slate-300">Lock</span> off to drag freely and
+              adjust the X and Y distances themselves.
             </p>
             {drawing && <p className="text-slate-400">Esc cancels · Enter confirms.</p>}
           </div>

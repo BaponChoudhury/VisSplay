@@ -92,7 +92,7 @@ export default function SplayCheckApp() {
   const [mapReady, setMapReady] = useState(false);
   const [mode, setMode] = useState<Mode>("manual");
   const [step, setStep] = useState<Step>("idle");
-  const [snapToX, setSnapToX] = useState(true);
+  const [lockDistances, setLockDistances] = useState(true);
   const [points, setPoints] = useState<SplayPoints>(EMPTY_POINTS);
   const [params, setParams] = useState<SplayParams>(DEFAULT_PARAMS);
   const [mapType, setMapType] = useState<"hybrid" | "roadmap">("hybrid");
@@ -106,8 +106,8 @@ export default function SplayCheckApp() {
   const [notice, setNotice] = useState<string | null>(null);
 
   // Latest-state ref so persistent map listeners never see stale closures.
-  const liveRef = useRef({ step, mode, snapToX, measuring, points, params });
-  liveRef.current = { step, mode, snapToX, measuring, points, params };
+  const liveRef = useRef({ step, mode, lockDistances, measuring, points, params });
+  liveRef.current = { step, mode, lockDistances, measuring, points, params };
 
   // ---------------------------------------------------------------- results
   const results: SplayResults = useMemo(() => {
@@ -150,9 +150,12 @@ export default function SplayCheckApp() {
       case "origin": {
         const mouth = live.points.mouth;
         if (!mouth) return;
-        const origin = live.snapToX
-          ? offsetM(mouth, live.params.xDistance, headingDeg(mouth, pos))
-          : pos;
+        // With the lock on, snap A to exactly X back along the cursor
+        // direction; otherwise place it free (Manual measures achieved X).
+        const origin =
+          live.lockDistances && live.mode === "auto"
+            ? offsetM(mouth, live.params.xDistance, headingDeg(mouth, pos))
+            : pos;
         clearGhost();
         if (live.mode === "auto") {
           // Auto-place both Y handles at the required distance, perpendicular
@@ -195,9 +198,10 @@ export default function SplayCheckApp() {
       return;
     }
     const mouth = live.points.mouth;
-    const ghost = live.snapToX
-      ? offsetM(mouth, live.params.xDistance, headingDeg(mouth, pos))
-      : pos;
+    const ghost =
+      live.lockDistances && live.mode === "auto"
+        ? offsetM(mouth, live.params.xDistance, headingDeg(mouth, pos))
+        : pos;
 
     if (!ghostMarkerRef.current) {
       ghostMarkerRef.current = new google.maps.Marker({
@@ -429,21 +433,24 @@ export default function SplayCheckApp() {
           if (!e.latLng) return;
           let pos = e.latLng.toJSON();
           const live = liveRef.current;
-          // Automatic mode: lock the Y handles to the required distance so the
-          // engineer can slide them onto the kerb without changing Y. The
-          // handle is constrained to the arc of radius = required Y about the
-          // junction mouth; only its bearing follows the cursor.
-          if (
-            (key === "left" || key === "right") &&
-            live.mode === "auto" &&
-            live.points.mouth
-          ) {
-            pos = offsetM(
-              live.points.mouth,
-              live.params.yRequired,
-              headingDeg(live.points.mouth, pos)
-            );
-            m!.setPosition(pos); // pin the marker onto the locked arc each frame
+          // Automatic mode with the lock on: constrain the point to the arc of
+          // its required distance about the junction mouth (X for Point A,
+          // required Y for the left/right handles) so the engineer can slide it
+          // onto the centreline / kerb without the distance changing — only the
+          // bearing follows the cursor. Unlock (or Manual mode) to drag freely
+          // and adjust the actual distance.
+          const mouth = live.points.mouth;
+          if (mouth && live.mode === "auto" && live.lockDistances) {
+            const lockedDist =
+              key === "origin"
+                ? live.params.xDistance
+                : key === "left" || key === "right"
+                  ? live.params.yRequired
+                  : null;
+            if (lockedDist != null) {
+              pos = offsetM(mouth, lockedDist, headingDeg(mouth, pos));
+              m!.setPosition(pos); // pin the marker onto the locked arc each frame
+            }
           }
           setPoints((prev) => ({ ...prev, [key]: pos }));
         });
@@ -617,11 +624,16 @@ export default function SplayCheckApp() {
     }
     setParams(next);
 
-    // When the required Y changes (e.g. the engineer picks a different major-
-    // road speed), snap both placed Y handles out to the new required distance
-    // along their current bearing from the junction mouth. The handles stay
-    // draggable, so the engineer can then pull each one back to a real
-    // obstruction to record the achieved sightline.
+    // Only re-snap the drawn envelope when the lock is on in Automatic mode.
+    // In Manual mode (or with the lock off) the placed points represent the
+    // achieved geometry, so a parameter change must not move them — it just
+    // updates the requirement the results are compared against.
+    if (liveRef.current.mode !== "auto" || !liveRef.current.lockDistances)
+      return;
+
+    // Picking a different major-road speed changes the required Y: snap both Y
+    // handles out to the new distance along their current bearing from the
+    // junction mouth (preserving the direction the engineer set onto the kerb).
     if (next.yRequired !== prev.yRequired) {
       setPoints((pts) => {
         const m = pts.mouth;
@@ -629,6 +641,19 @@ export default function SplayCheckApp() {
         const snap = (h: LatLng | null) =>
           h ? offsetM(m, next.yRequired, headingDeg(m, h)) : h;
         return { ...pts, left: snap(pts.left), right: snap(pts.right) };
+      });
+    }
+
+    // Likewise, changing the X setback repositions Point A to the new X along
+    // its current bearing from the junction mouth.
+    if (next.xDistance !== prev.xDistance) {
+      setPoints((pts) => {
+        const m = pts.mouth;
+        if (!m || !pts.origin) return pts;
+        return {
+          ...pts,
+          origin: offsetM(m, next.xDistance, headingDeg(m, pts.origin)),
+        };
       });
     }
   };
@@ -751,8 +776,8 @@ export default function SplayCheckApp() {
         mapsStatus={mapsState.status}
         mode={mode}
         step={step}
-        snapToX={snapToX}
-        onSnapToX={setSnapToX}
+        lockDistances={lockDistances}
+        onLockDistances={setLockDistances}
         onStartDrawing={startDrawing}
         onReset={resetSplay}
         params={params}
