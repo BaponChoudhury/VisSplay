@@ -45,30 +45,19 @@ survey.
 - `lib/export.ts` — PNG export (html2canvas capture + vector redraw +
   parameters block).
 
-## Street View inspection (Phase 2)
-
-Once a splay is drawn, **Inspect in Street View** (Tools) opens a panorama
-beside the map at Point A, facing the Y point, with the sightline overlaid as
-a receding trail of markers to the Y endpoint so you can pan and judge whether
-a hedge / fence / building cuts the line. Toggle the left/right leg, and click
-anywhere along the sightline on the map to move the camera to the nearest
-panorama (it snaps to the A→Y line and keeps facing Y). A persistent chip warns
-that the Street View camera (~2.5 m) sits well above driver eye height
-(1.05 m), and the imagery capture date is shown with a staleness warning when
-it is over two years old.
-
-## 3D driver's-eye view (Phase 3)
+## 3D driver's-eye view
 
 **🚗 3D driver's-eye view** (Tools) opens a CesiumJS panel using Google
 Photorealistic 3D Tiles. The camera sits **at the vehicle — Point A (the X
 setback) — at the driver eye height** (1.05–2.0 m, from the Sightline heights
-control), looking along the active splay leg toward the Y point. The line of
-sight is drawn from the eye to Y, with a translucent red "curtain" from the
-object height up to 2.0 m along the leg, so you can see whether a hedge, fence
-or building intersects the sightline. Raising the eye height lifts the camera
-in place — it does not move the car. Toggle left/right leg, and switch between
-the **Driver eye** and **Orbit** presets. Clash judgement is visual in this
-phase.
+control). **Both** sightlines are drawn — the line of sight to the left Y point
+(B) and to the right Y point (C) — each with a translucent red "curtain" from
+the object height up to 2.0 m along the leg, so you can see whether a hedge,
+fence or building intersects either sightline. The driver looks ahead toward
+the junction by default; use **Look ◀ Left / Ahead / Right ▶** to snap the
+view to each side, or **Orbit** for a bird's-eye of the whole splay. Raising
+the eye height lifts the camera in place — it does not move the car. Clash
+judgement is visual in this phase.
 
 > Requires the **Map Tiles API** enabled on the Google key. Cesium's runtime
 > assets are copied to `public/cesium` automatically on `npm install`
@@ -77,7 +66,6 @@ phase.
 ## Roadmap
 
 - **Phase 1** — 2D map splay tool ✅
-- **Phase 2** — Street View sightline inspection ✅
-- **Phase 3** — 3D photorealistic driver's-eye view (CesiumJS + Google 3D Tiles) ✅
-- **Phase 4** (future) — automated line-of-sight testing against Environment
-  Agency LiDAR DSM
+- **3D driver's-eye view** (CesiumJS + Google 3D Tiles) ✅
+- **Future** — automated line-of-sight testing against Environment Agency
+  LiDAR DSM

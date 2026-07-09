@@ -9,12 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useGoogleMaps } from "@/lib/useGoogleMaps";
-import {
-  distanceM,
-  headingDeg,
-  offsetM,
-  projectOntoSegment,
-} from "@/lib/geo";
+import { distanceM, headingDeg, offsetM } from "@/lib/geo";
 import {
   DRIVER_EYE_HEIGHT_M,
   OBJECT_HEIGHT_DEFAULT_M,
@@ -31,7 +26,6 @@ import { assessmentStore, newAssessmentId } from "@/lib/storage";
 import { exportSplayPng } from "@/lib/export";
 import dynamic from "next/dynamic";
 import ControlPanel from "./ControlPanel";
-import StreetViewPanel from "./StreetViewPanel";
 
 // Cesium is a large, browser-only library — code-split and load on demand.
 const Cesium3DPanel = dynamic(() => import("./Cesium3DPanel"), { ssr: false });
@@ -123,13 +117,8 @@ export default function SplayCheckApp() {
   const [exporting, setExporting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
-  // Street View inspection (Phase 2) and 3D driver's-eye view (Phase 3).
-  const [svOpen, setSvOpen] = useState(false);
+  // 3D driver's-eye view (Phase 3).
   const [threeDOpen, setThreeDOpen] = useState(false);
-  const [svSide, setSvSide] = useState<"left" | "right">("left");
-  const [svCamera, setSvCamera] = useState<LatLng | null>(null);
-  const [svOffsetM, setSvOffsetM] = useState(0);
-  const svCameraMarkerRef = useRef<google.maps.Marker | null>(null);
 
   // Latest-state ref so persistent map listeners never see stale closures.
   const liveRef = useRef({
@@ -139,9 +128,7 @@ export default function SplayCheckApp() {
     measuring,
     points,
     params,
-    svOpen,
     threeDOpen,
-    svSide,
   });
   liveRef.current = {
     step,
@@ -150,9 +137,7 @@ export default function SplayCheckApp() {
     measuring,
     points,
     params,
-    svOpen,
     threeDOpen,
-    svSide,
   };
 
   // ---------------------------------------------------------------- results
@@ -178,20 +163,6 @@ export default function SplayCheckApp() {
   // ------------------------------------------------------------ map clicks
   const handleMapClick = useCallback((pos: LatLng) => {
     const live = liveRef.current;
-
-    // Street View open: a map click drops the camera in along the active
-    // sightline, snapped to the A→Y segment and facing the Y point.
-    if (live.svOpen) {
-      const target =
-        live.svSide === "left" ? live.points.left : live.points.right;
-      const origin = live.points.origin;
-      if (origin && target) {
-        const proj = projectOntoSegment(origin, target, pos);
-        setSvCamera(proj.point);
-        setSvOffsetM(proj.alongM);
-      }
-      return;
-    }
 
     if (live.measuring) {
       const pts = measurePtsRef.current;
@@ -600,33 +571,6 @@ export default function SplayCheckApp() {
     });
   }, [mapReady, points, params.yRequired]);
 
-  // ----------------------------------------- street view camera marker
-  const svTarget = svSide === "left" ? points.left : points.right;
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!mapReady || !map) return;
-    if (!svOpen || !svCamera || !svTarget) {
-      svCameraMarkerRef.current?.setMap(null);
-      return;
-    }
-    let m = svCameraMarkerRef.current;
-    if (!m) {
-      m = new google.maps.Marker({ clickable: false, zIndex: 40 });
-      svCameraMarkerRef.current = m;
-    }
-    m.setMap(map);
-    m.setPosition(svCamera);
-    m.setIcon({
-      path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-      scale: 5,
-      fillColor: "#38bdf8",
-      fillOpacity: 1,
-      strokeColor: "#ffffff",
-      strokeWeight: 1.5,
-      rotation: headingDeg(svCamera, svTarget),
-    });
-  }, [mapReady, svOpen, svCamera, svTarget]);
-
   // Google Maps needs a resize nudge when the split layout changes width.
   useEffect(() => {
     const map = mapRef.current;
@@ -635,7 +579,7 @@ export default function SplayCheckApp() {
       google.maps.event.trigger(map, "resize");
     }, 210);
     return () => window.clearTimeout(t);
-  }, [mapReady, svOpen, threeDOpen]);
+  }, [mapReady, threeDOpen]);
 
   // ------------------------------------------------------------- keyboard
   useEffect(() => {
@@ -651,10 +595,7 @@ export default function SplayCheckApp() {
         return;
 
       if (e.key === "Escape") {
-        if (liveRef.current.svOpen) {
-          setSvOpen(false);
-          svCameraMarkerRef.current?.setMap(null);
-        } else if (liveRef.current.threeDOpen) {
+        if (liveRef.current.threeDOpen) {
           setThreeDOpen(false);
         } else if (liveRef.current.measuring) {
           setMeasuring(false);
@@ -692,7 +633,6 @@ export default function SplayCheckApp() {
     setPoints(EMPTY_POINTS);
     setCurrentId(null);
     setStep("mouth");
-    setSvOpen(false);
     setThreeDOpen(false);
     if (measuring) {
       setMeasuring(false);
@@ -705,61 +645,18 @@ export default function SplayCheckApp() {
     setPoints(EMPTY_POINTS);
     setStep("idle");
     setCurrentId(null);
-    setSvOpen(false);
     setThreeDOpen(false);
-  };
-
-  // -------------------------------------------------------- street view
-  const openStreetView = () => {
-    const p = liveRef.current.points;
-    if (!p.origin || !(p.left || p.right)) return;
-    const side: "left" | "right" = p.left ? "left" : "right";
-    setSvSide(side);
-    setSvCamera(p.origin);
-    setSvOffsetM(0);
-    if (measuring) {
-      setMeasuring(false);
-      clearMeasure();
-    }
-    setThreeDOpen(false);
-    setSvOpen(true);
-  };
-
-  const switchStreetViewSide = () => {
-    const p = liveRef.current.points;
-    const next = liveRef.current.svSide === "left" ? "right" : "left";
-    if (!p[next]) return; // no handle on that side
-    setSvSide(next);
-    if (p.origin) {
-      setSvCamera(p.origin); // reset the camera back to Point A on the new leg
-      setSvOffsetM(0);
-    }
-  };
-
-  const closeStreetView = () => {
-    setSvOpen(false);
-    svCameraMarkerRef.current?.setMap(null);
   };
 
   // ----------------------------------------------------- 3D driver view
   const open3D = () => {
     const p = liveRef.current.points;
     if (!p.origin || !(p.left || p.right)) return;
-    setSvSide(p[liveRef.current.svSide] ? liveRef.current.svSide : p.left ? "left" : "right");
-    setSvOpen(false);
-    svCameraMarkerRef.current?.setMap(null);
     if (measuring) {
       setMeasuring(false);
       clearMeasure();
     }
     setThreeDOpen(true);
-  };
-
-  const switch3DSide = () => {
-    const p = liveRef.current.points;
-    const next = liveRef.current.svSide === "left" ? "right" : "left";
-    if (!p[next]) return;
-    setSvSide(next);
   };
 
   const close3D = () => setThreeDOpen(false);
@@ -856,7 +753,6 @@ export default function SplayCheckApp() {
     const map = mapRef.current;
     if (!a || !map) return;
     clearGhost();
-    setSvOpen(false);
     setThreeDOpen(false);
     if (measuring) {
       setMeasuring(false);
@@ -963,8 +859,6 @@ export default function SplayCheckApp() {
         exporting={exporting}
         onExport={() => void doExport()}
         canInspect={!!(points.origin && (points.left || points.right))}
-        svOpen={svOpen}
-        onInspect={openStreetView}
         threeDOpen={threeDOpen}
         onInspect3D={open3D}
         saved={saved}
@@ -1007,21 +901,6 @@ export default function SplayCheckApp() {
         )}
         </div>
 
-        {svOpen && svCamera && svTarget && points.origin && (
-          <div className="min-w-0 flex-1 border-l border-slate-700">
-            <StreetViewPanel
-              cameraLocation={svCamera}
-              target={svTarget}
-              side={svSide}
-              requiredY={params.yRequired}
-              eyeHeight={params.eyeHeight}
-              cameraOffsetM={svOffsetM}
-              onSwitchSide={switchStreetViewSide}
-              onClose={closeStreetView}
-            />
-          </div>
-        )}
-
         {threeDOpen &&
           points.origin &&
           (points.left || points.right) &&
@@ -1032,11 +911,9 @@ export default function SplayCheckApp() {
                 origin={points.origin}
                 left={points.left}
                 right={points.right}
-                side={svSide}
                 eyeHeight={params.eyeHeight}
                 objectHeight={params.objectHeight}
                 requiredY={params.yRequired}
-                onSwitchSide={switch3DSide}
                 onClose={close3D}
               />
             </div>

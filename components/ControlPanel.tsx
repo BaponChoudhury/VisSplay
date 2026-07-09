@@ -50,8 +50,6 @@ interface Props {
   exporting: boolean;
   onExport: () => void;
   canInspect: boolean;
-  svOpen: boolean;
-  onInspect: () => void;
   threeDOpen: boolean;
   onInspect3D: () => void;
   saved: SavedAssessment[];
@@ -470,27 +468,13 @@ export default function ControlPanel(props: Props) {
           )}
           <button
             className={`${
-              props.svOpen ? btnPrimary : btnSecondary
-            } mt-2 w-full`}
-            disabled={!props.canInspect}
-            onClick={props.onInspect}
-            title={
-              props.canInspect
-                ? "Open Street View at Point A looking down the splay"
-                : "Draw a splay (origin + at least one Y point) first"
-            }
-          >
-            👁 Inspect in Street View
-          </button>
-          <button
-            className={`${
               props.threeDOpen ? btnPrimary : btnSecondary
             } mt-2 w-full`}
             disabled={!props.canInspect}
             onClick={props.onInspect3D}
             title={
               props.canInspect
-                ? "3D driver's-eye view from the car at the X setback, at eye height, along the sightline"
+                ? "3D driver's-eye view from the car at the X setback, at eye height, along both sightlines"
                 : "Draw a splay (origin + at least one Y point) first"
             }
           >
@@ -498,10 +482,10 @@ export default function ControlPanel(props: Props) {
           </button>
           {props.canInspect && (
             <p className="mt-1.5 text-xs leading-4 text-slate-500">
-              Both open beside the map at Point A, facing the Y point. Street
-              View snaps to the road at ~2.5 m; the 3D view puts the camera at
-              the car at your chosen eye height (1.05–2.0 m) so you can see if
-              the line of sight is clear along Y. Needs the Map Tiles API.
+              Opens beside the map with the camera at the car (Point A) at your
+              chosen eye height (1.05–2.0 m). Both sightlines are drawn; look
+              left / ahead / right to check each side is clear. Needs the Map
+              Tiles API.
             </p>
           )}
         </div>

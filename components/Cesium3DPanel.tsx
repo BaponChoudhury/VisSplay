@@ -5,14 +5,15 @@
  * Photorealistic 3D Tiles).
  *
  * Puts the camera at the vehicle: Point A (the X setback), at the driver eye
- * height above the road surface, looking along the active splay leg toward the
- * Y point. The sightline is drawn from the eye to the Y point, with a vertical
- * "curtain" from the road up to 2.0 m along the leg and the sight line at eye
- * height, so the engineer can see whether a hedge / fence / building
- * intersects the line of sight. Raising the eye height (1.05–2.0 m) lifts the
- * camera at the same ground position — it does not move the car.
+ * height above the road surface. BOTH splay legs are drawn — the line of sight
+ * to the left Y point (B) and to the right Y point (C) — each with a vertical
+ * obstruction "curtain" from the object height up to 2.0 m. The driver looks
+ * ahead toward the junction by default and can snap the view left / right to
+ * inspect each sightline, or switch to an orbit view. If a line passes through
+ * a hedge, fence or building, that sightline is obstructed.
  *
- * Requires the Map Tiles API enabled on the Google key.
+ * Raising the eye height (1.05–2.0 m) lifts the camera in place — it does not
+ * move the car. Requires the Map Tiles API enabled on the Google key.
  *
  * NOTE: clash judgement is visual/manual in this phase. A future Phase 4 could
  * add automated line-of-sight testing against Environment Agency LiDAR DSM.
@@ -20,7 +21,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { LatLng } from "@/lib/types";
-import { distanceM } from "@/lib/geo";
 import { OBJECT_HEIGHT_MAX_M } from "@/lib/standards";
 
 // Cesium is far too large to run through the Next/webpack bundler, so it is
@@ -68,17 +68,16 @@ function loadCesium(): Promise<Cesium> {
 }
 
 type Preset = "driver" | "orbit";
+type LookDir = "ahead" | "left" | "right";
 
 interface Props {
   apiKey: string;
   origin: LatLng;
   left: LatLng | null;
   right: LatLng | null;
-  side: "left" | "right";
   eyeHeight: number;
   objectHeight: number;
   requiredY: number;
-  onSwitchSide: () => void;
   onClose: () => void;
 }
 
@@ -87,11 +86,9 @@ export default function Cesium3DPanel({
   origin,
   left,
   right,
-  side,
   eyeHeight,
   objectHeight,
   requiredY,
-  onSwitchSide,
   onClose,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -105,9 +102,14 @@ export default function Cesium3DPanel({
   );
   const [error, setError] = useState<string | null>(null);
   const [preset, setPreset] = useState<Preset>("driver");
+  const [lookDir, setLookDir] = useState<LookDir>("ahead");
 
   const key = (p: LatLng) => `${p.lat.toFixed(7)},${p.lng.toFixed(7)}`;
-  const target = side === "left" ? left : right;
+  const groundAt = (p: LatLng) => groundRef.current.get(key(p)) ?? 0;
+  const midpoint = (a: LatLng, b: LatLng): LatLng => ({
+    lat: (a.lat + b.lat) / 2,
+    lng: (a.lng + b.lng) / 2,
+  });
 
   // ---- sample the road-surface height at the splay points -----------------
   const sampleGround = useCallback(async (): Promise<boolean> => {
@@ -131,146 +133,168 @@ export default function Cesium3DPanel({
     }
   }, [origin, left, right]);
 
-  const groundAt = (p: LatLng) => groundRef.current.get(key(p)) ?? 0;
-
-  // ---- draw the sightline + envelope and place the camera -----------------
+  // ---- draw both sightlines + envelopes and place the camera --------------
   const redraw = useCallback(() => {
     const Cesium = cesiumRef.current;
     const viewer = viewerRef.current;
-    if (!Cesium || !viewer || !target) return;
+    if (!Cesium || !viewer) return;
 
     viewer.entities.removeAll();
-
-    const gA = groundAt(origin);
-    const gY = groundAt(target);
-    const eye = Cesium.Cartesian3.fromDegrees(
-      origin.lng,
-      origin.lat,
-      gA + eyeHeight
-    );
-    const yEye = Cesium.Cartesian3.fromDegrees(
-      target.lng,
-      target.lat,
-      gY + eyeHeight
-    );
 
     const red = Cesium.Color.fromCssColorString("#ef4444");
     const amber = Cesium.Color.fromCssColorString("#f59e0b");
     const sky = Cesium.Color.fromCssColorString("#38bdf8");
 
-    // Eye-level line of sight.
-    viewer.entities.add({
-      polyline: {
-        positions: [eye, yEye],
-        width: 4,
-        material: red,
-        clampToGround: false,
-      },
-    });
+    const gA = groundAt(origin);
+    const eye = Cesium.Cartesian3.fromDegrees(
+      origin.lng,
+      origin.lat,
+      gA + eyeHeight
+    );
 
-    // Obstruction curtain: object height → 2.0 m along the leg.
-    viewer.entities.add({
-      wall: {
-        positions: Cesium.Cartesian3.fromDegreesArrayHeights([
-          origin.lng,
-          origin.lat,
-          gA + objectHeight,
-          target.lng,
-          target.lat,
-          gY + objectHeight,
-        ]),
-        maximumHeights: [gA + OBJECT_HEIGHT_MAX_M, gY + OBJECT_HEIGHT_MAX_M],
-        minimumHeights: [gA + objectHeight, gY + objectHeight],
-        material: red.withAlpha(0.16),
-        outline: true,
-        outlineColor: red.withAlpha(0.7),
-      },
-    });
+    const drawLeg = (pt: LatLng, label: string) => {
+      const gY = groundAt(pt);
+      const yEye = Cesium.Cartesian3.fromDegrees(
+        pt.lng,
+        pt.lat,
+        gY + eyeHeight
+      );
+      // Line of sight at eye level.
+      viewer.entities.add({
+        polyline: { positions: [eye, yEye], width: 4, material: red },
+      });
+      // Obstruction curtain: object height → 2.0 m along the leg.
+      viewer.entities.add({
+        wall: {
+          positions: Cesium.Cartesian3.fromDegreesArrayHeights([
+            origin.lng,
+            origin.lat,
+            gA + objectHeight,
+            pt.lng,
+            pt.lat,
+            gY + objectHeight,
+          ]),
+          maximumHeights: [gA + OBJECT_HEIGHT_MAX_M, gY + OBJECT_HEIGHT_MAX_M],
+          minimumHeights: [gA + objectHeight, gY + objectHeight],
+          material: red.withAlpha(0.16),
+          outline: true,
+          outlineColor: red.withAlpha(0.7),
+        },
+      });
+      // Ground guide line.
+      viewer.entities.add({
+        polyline: {
+          positions: [
+            Cesium.Cartesian3.fromDegrees(origin.lng, origin.lat, gA),
+            Cesium.Cartesian3.fromDegrees(pt.lng, pt.lat, gY),
+          ],
+          width: 2,
+          material: sky.withAlpha(0.8),
+        },
+      });
+      // Y marker.
+      viewer.entities.add({
+        position: yEye,
+        point: {
+          pixelSize: 12,
+          color: red,
+          outlineColor: Cesium.Color.WHITE,
+          outlineWidth: 2,
+        },
+        label: {
+          text: `Y ${label} ${requiredY.toFixed(0)} m`,
+          font: "700 13px system-ui, sans-serif",
+          fillColor: Cesium.Color.fromCssColorString("#fecaca"),
+          showBackground: true,
+          backgroundColor: Cesium.Color.fromCssColorString("#0f172acc"),
+          pixelOffset: new Cesium.Cartesian2(0, -22),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      });
+    };
 
-    // Driver eye marker (the vehicle) + Y marker.
+    if (left) drawLeg(left, "left (B)");
+    if (right) drawLeg(right, "right (C)");
+
+    // Driver eye marker (the vehicle).
     viewer.entities.add({
       position: eye,
-      point: { pixelSize: 12, color: amber, outlineColor: Cesium.Color.WHITE, outlineWidth: 2 },
+      point: {
+        pixelSize: 13,
+        color: amber,
+        outlineColor: Cesium.Color.WHITE,
+        outlineWidth: 2,
+      },
       label: {
         text: `Driver eye ${eyeHeight.toFixed(2)} m`,
         font: "600 13px system-ui, sans-serif",
         fillColor: Cesium.Color.WHITE,
         showBackground: true,
         backgroundColor: Cesium.Color.fromCssColorString("#0f172acc"),
-        pixelOffset: new Cesium.Cartesian2(0, -22),
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      },
-    });
-    viewer.entities.add({
-      position: yEye,
-      point: { pixelSize: 12, color: red, outlineColor: Cesium.Color.WHITE, outlineWidth: 2 },
-      label: {
-        text: `Y ${requiredY.toFixed(0)} m`,
-        font: "700 13px system-ui, sans-serif",
-        fillColor: Cesium.Color.fromCssColorString("#fecaca"),
-        showBackground: true,
-        backgroundColor: Cesium.Color.fromCssColorString("#0f172acc"),
-        pixelOffset: new Cesium.Cartesian2(0, -22),
+        pixelOffset: new Cesium.Cartesian2(0, -24),
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
       },
     });
 
-    // Base line on the ground to help orient.
-    viewer.entities.add({
-      polyline: {
-        positions: [
-          Cesium.Cartesian3.fromDegrees(origin.lng, origin.lat, gA),
-          Cesium.Cartesian3.fromDegrees(target.lng, target.lat, gY),
-        ],
-        width: 2,
-        material: sky.withAlpha(0.8),
-      },
-    });
-
-    placeCamera(Cesium, viewer, eye, yEye, gA, gY);
+    placeCamera(Cesium, viewer, eye, gA);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [origin, target, eyeHeight, objectHeight, requiredY, preset]);
+  }, [origin, left, right, eyeHeight, objectHeight, requiredY, preset, lookDir]);
 
   function placeCamera(
     Cesium: Cesium,
     viewer: Viewer,
     eye: Cartesian3,
-    yEye: Cartesian3,
-    gA: number,
-    gY: number
+    gA: number
   ) {
-    if (!target) return;
     if (preset === "driver") {
+      // Choose what the driver looks at: the chosen leg, or (ahead) the
+      // mid-point between the two Y points — i.e. toward the junction.
+      let look: LatLng | null = null;
+      if (lookDir === "left") look = left;
+      else if (lookDir === "right") look = right;
+      else look = left && right ? midpoint(left, right) : left ?? right;
+      if (!look) return;
+      const gL = groundRef.current.get(key(look)) ?? gA;
+      const target = Cesium.Cartesian3.fromDegrees(
+        look.lng,
+        look.lat,
+        gL + eyeHeight
+      );
       const dir = Cesium.Cartesian3.subtract(
-        yEye,
+        target,
         eye,
         new Cesium.Cartesian3()
       );
       Cesium.Cartesian3.normalize(dir, dir);
-      // Local up at the eye position.
       const up = Cesium.Cartesian3.normalize(eye, new Cesium.Cartesian3());
       viewer.camera.setView({
         destination: eye,
         orientation: { direction: dir, up },
       });
     } else {
-      // Orbit: look at the mid-point of the leg from above and behind A.
-      const midLng = (origin.lng + target.lng) / 2;
-      const midLat = (origin.lat + target.lat) / 2;
-      const legLen = distanceM(origin, target);
-      const center = Cesium.Cartesian3.fromDegrees(
-        midLng,
-        midLat,
-        (gA + gY) / 2
+      // Orbit: frame the whole splay from above and behind Point A.
+      const pts = [origin, left, right].filter(Boolean) as LatLng[];
+      const midLng = pts.reduce((s, p) => s + p.lng, 0) / pts.length;
+      const midLat = pts.reduce((s, p) => s + p.lat, 0) / pts.length;
+      const spread = Math.max(
+        30,
+        ...pts.map(
+          (p) =>
+            Cesium.Cartesian3.distance(
+              Cesium.Cartesian3.fromDegrees(midLng, midLat, 0),
+              Cesium.Cartesian3.fromDegrees(p.lng, p.lat, 0)
+            ) || 0
+        )
       );
+      const center = Cesium.Cartesian3.fromDegrees(midLng, midLat, gA);
       viewer.camera.flyToBoundingSphere(
-        new Cesium.BoundingSphere(center, Math.max(30, legLen * 0.7)),
+        new Cesium.BoundingSphere(center, spread),
         {
           duration: 0.8,
           offset: new Cesium.HeadingPitchRange(
             0,
-            Cesium.Math.toRadians(-35),
-            Math.max(80, legLen * 1.8)
+            Cesium.Math.toRadians(-40),
+            spread * 3.2
           ),
         }
       );
@@ -282,7 +306,6 @@ export default function Cesium3DPanel({
     let destroyed = false;
     (async () => {
       if (!containerRef.current) return;
-      // Load the widgets CSS from the copied assets.
       if (!document.getElementById("cesium-widgets-css")) {
         const link = document.createElement("link");
         link.id = "cesium-widgets-css";
@@ -368,11 +391,13 @@ export default function Cesium3DPanel({
     right?.lng,
   ]);
 
-  // Redraw (no re-sample) when eye height, side or preset changes.
+  // Redraw (no re-sample) when eye height, object height, preset or look changes.
   useEffect(() => {
     if (status === "ready") redraw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eyeHeight, objectHeight, side, preset, requiredY]);
+  }, [eyeHeight, objectHeight, preset, lookDir, requiredY]);
+
+  const hasBoth = !!(left && right);
 
   return (
     <div className="relative h-full w-full bg-slate-950">
@@ -403,13 +428,49 @@ export default function Cesium3DPanel({
               Orbit
             </button>
           </div>
-          <button
-            onClick={onSwitchSide}
-            className="rounded-md border border-slate-600 bg-slate-900/90 px-3 py-1.5 text-sm font-medium text-sky-300 shadow-lg hover:bg-slate-700"
-            title="Toggle which splay leg to inspect"
-          >
-            {side === "left" ? "◀ Left (A–B)" : "Right (A–C) ▶"}
-          </button>
+          {preset === "driver" && (
+            <div className="flex overflow-hidden rounded-md border border-slate-600 bg-slate-900/90 shadow-lg">
+              <span className="px-2.5 py-1.5 text-xs font-semibold text-slate-400">
+                Look
+              </span>
+              {left && (
+                <button
+                  onClick={() => setLookDir("left")}
+                  className={`border-l border-slate-600 px-2.5 py-1.5 text-sm font-medium ${
+                    lookDir === "left"
+                      ? "bg-sky-600 text-white"
+                      : "text-slate-300 hover:bg-slate-700"
+                  }`}
+                >
+                  ◀ Left
+                </button>
+              )}
+              {hasBoth && (
+                <button
+                  onClick={() => setLookDir("ahead")}
+                  className={`border-l border-slate-600 px-2.5 py-1.5 text-sm font-medium ${
+                    lookDir === "ahead"
+                      ? "bg-sky-600 text-white"
+                      : "text-slate-300 hover:bg-slate-700"
+                  }`}
+                >
+                  Ahead
+                </button>
+              )}
+              {right && (
+                <button
+                  onClick={() => setLookDir("right")}
+                  className={`border-l border-slate-600 px-2.5 py-1.5 text-sm font-medium ${
+                    lookDir === "right"
+                      ? "bg-sky-600 text-white"
+                      : "text-slate-300 hover:bg-slate-700"
+                  }`}
+                >
+                  Right ▶
+                </button>
+              )}
+            </div>
+          )}
         </div>
         <button
           onClick={onClose}
@@ -423,12 +484,11 @@ export default function Cesium3DPanel({
       {status === "ready" && (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-2.5">
           <div className="max-w-lg rounded-md border border-slate-600 bg-slate-900/90 px-3 py-1.5 text-center text-[11px] leading-4 text-slate-300 shadow-lg">
-            Looking from the driver eye at {eyeHeight.toFixed(2)} m along the{" "}
-            {side === "left" ? "left (A–B)" : "right (A–C)"} leg. Red line = line
-            of sight; red curtain = {objectHeight.toFixed(2)}–
-            {OBJECT_HEIGHT_MAX_M.toFixed(1)} m obstruction envelope. If the line
-            passes through a hedge, fence or building, the sightline is
-            obstructed. Drag to look around.
+            From the driver eye at {eyeHeight.toFixed(2)} m. Both sightlines are
+            drawn (red line) with the {objectHeight.toFixed(2)}–
+            {OBJECT_HEIGHT_MAX_M.toFixed(1)} m obstruction curtain. If a line
+            passes through a hedge, fence or building, that side is obstructed.
+            Use Look ◀ ▶ or drag to check each side.
           </div>
         </div>
       )}
