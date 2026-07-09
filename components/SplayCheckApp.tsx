@@ -2,9 +2,8 @@
 
 /**
  * SplayCheck main app: Google Map, splay drawing state machine, measurement
- * tool, save/load, PNG export and the Street View sightline inspector
- * (Phase 2). All standards values come from lib/standards.ts — nothing is
- * hardcoded here.
+ * tool, save/load, PNG export and the 3D driver's-eye view. All standards
+ * values come from lib/standards.ts — nothing is hardcoded here.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";

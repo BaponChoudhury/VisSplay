@@ -436,7 +436,7 @@ export default function ControlPanel(props: Props) {
             object height ({params.objectHeight.toFixed(2)} m) and{" "}
             {OBJECT_HEIGHT_MAX_M.toFixed(1)} m above the carriageway, seen from
             the driver eye height ({params.eyeHeight.toFixed(2)} m). These drive
-            the Street View caveat and the export summary.
+            the 3D driver's-eye view and the export summary.
           </p>
         </div>
 
