@@ -70,6 +70,20 @@ function loadCesium(): Promise<Cesium> {
 type Preset = "driver" | "orbit";
 type LookDir = "ahead" | "left" | "right";
 
+/** Result of the automated line-of-sight test along one splay leg. */
+type LegResult = {
+  clear: boolean;
+  /** Distance from Point A (m) where the surface most intrudes above the line. */
+  worstDistM: number;
+  /** How far the surface rises above the line of sight there (m); 0 if clear. */
+  worstIntrusionM: number;
+  /** True if the tile surface could not be sampled along the leg. */
+  incomplete: boolean;
+} | null;
+
+/** Tolerance (m) — surface must rise this far above the line to count as a block. */
+const INTRUSION_TOLERANCE_M = 0.1;
+
 interface Props {
   apiKey: string;
   origin: LatLng;
@@ -101,8 +115,11 @@ export default function Cesium3DPanel({
     "loading"
   );
   const [error, setError] = useState<string | null>(null);
-  const [preset, setPreset] = useState<Preset>("driver");
+  const [preset, setPreset] = useState<Preset>("orbit");
   const [lookDir, setLookDir] = useState<LookDir>("ahead");
+  const [checking, setChecking] = useState(false);
+  const [checkLeft, setCheckLeft] = useState<LegResult>(null);
+  const [checkRight, setCheckRight] = useState<LegResult>(null);
 
   const key = (p: LatLng) => `${p.lat.toFixed(7)},${p.lng.toFixed(7)}`;
   const groundAt = (p: LatLng) => groundRef.current.get(key(p)) ?? 0;
@@ -110,6 +127,8 @@ export default function Cesium3DPanel({
     lat: (a.lat + b.lat) / 2,
     lng: (a.lng + b.lng) / 2,
   });
+  const resultFor = (side: "left" | "right") =>
+    side === "left" ? checkLeft : checkRight;
 
   // ---- sample the road-surface height at the splay points -----------------
   // Returns true once the origin (driver) height is known, so the caller can
@@ -170,6 +189,95 @@ export default function Cesium3DPanel({
     });
   }, [origin, left, right]);
 
+  // ---- automated line-of-sight test along a leg ---------------------------
+  // Samples the 3D-tile surface at ~1 m steps along A→Y and checks whether it
+  // rises above the straight line from the driver eye (ground_A + eye height)
+  // to the object at Y (ground_Y + object height). Reports the worst intrusion.
+  const checkLeg = useCallback(
+    async (pt: LatLng): Promise<LegResult> => {
+      const Cesium = cesiumRef.current;
+      const viewer = viewerRef.current;
+      if (!Cesium || !viewer) return null;
+      if (!groundRef.current.has(key(origin)) || !groundRef.current.has(key(pt)))
+        return { clear: true, worstDistM: 0, worstIntrusionM: 0, incomplete: true };
+
+      const gA = groundAt(origin);
+      const gY = groundAt(pt);
+      const eyeAbs = gA + eyeHeight;
+      const targetAbs = gY + objectHeight;
+      const totalM = Cesium.Cartesian3.distance(
+        Cesium.Cartesian3.fromDegrees(origin.lng, origin.lat, 0),
+        Cesium.Cartesian3.fromDegrees(pt.lng, pt.lat, 0)
+      );
+      const steps = Math.min(80, Math.max(12, Math.round(totalM)));
+      const fracs: number[] = [];
+      const cartos: import("cesium").Cartographic[] = [];
+      for (let i = 1; i < steps; i++) {
+        const f = i / steps;
+        fracs.push(f);
+        cartos.push(
+          Cesium.Cartographic.fromDegrees(
+            origin.lng + (pt.lng - origin.lng) * f,
+            origin.lat + (pt.lat - origin.lat) * f
+          )
+        );
+      }
+
+      let sampled: (import("cesium").Cartographic | undefined)[] = [];
+      try {
+        if (viewer.scene.sampleHeightSupported) {
+          sampled = await viewer.scene.sampleHeightMostDetailed(cartos);
+        } else {
+          const cs = await viewer.scene.clampToHeightMostDetailed(
+            cartos.map((c) =>
+              Cesium.Cartesian3.fromRadians(c.longitude, c.latitude, 0)
+            )
+          );
+          sampled = cs.map((c: Cartesian3 | undefined) =>
+            c ? Cesium.Cartographic.fromCartesian(c) : undefined
+          );
+        }
+      } catch {
+        return { clear: true, worstDistM: 0, worstIntrusionM: 0, incomplete: true };
+      }
+
+      let worstIntr = -Infinity;
+      let worstDist = 0;
+      let missing = 0;
+      sampled.forEach((c, i) => {
+        if (!c || !Number.isFinite(c.height)) {
+          missing++;
+          return;
+        }
+        const f = fracs[i];
+        const losH = eyeAbs + (targetAbs - eyeAbs) * f;
+        const intr = c.height - losH;
+        if (intr > worstIntr) {
+          worstIntr = intr;
+          worstDist = f * totalM;
+        }
+      });
+      if (worstIntr === -Infinity)
+        return { clear: true, worstDistM: 0, worstIntrusionM: 0, incomplete: true };
+      return {
+        clear: worstIntr <= INTRUSION_TOLERANCE_M,
+        worstDistM: worstDist,
+        worstIntrusionM: Math.max(0, worstIntr),
+        incomplete: missing > sampled.length * 0.3,
+      };
+    },
+    [origin, left, right, eyeHeight, objectHeight]
+  );
+
+  const runSightlineCheck = useCallback(async () => {
+    setChecking(true);
+    const l = left ? await checkLeg(left) : null;
+    const r = right ? await checkLeg(right) : null;
+    setCheckLeft(l);
+    setCheckRight(r);
+    setChecking(false);
+  }, [left, right, checkLeg]);
+
   // ---- draw both sightlines + envelopes and place the camera --------------
   const redraw = useCallback(() => {
     const Cesium = cesiumRef.current;
@@ -189,18 +297,32 @@ export default function Cesium3DPanel({
       gA + eyeHeight
     );
 
-    const drawLeg = (pt: LatLng, label: string) => {
+    const green = Cesium.Color.fromCssColorString("#22c55e");
+    const totalTo = (pt: LatLng) =>
+      Cesium.Cartesian3.distance(
+        Cesium.Cartesian3.fromDegrees(origin.lng, origin.lat, 0),
+        Cesium.Cartesian3.fromDegrees(pt.lng, pt.lat, 0)
+      );
+
+    const drawLeg = (pt: LatLng, label: string, side: "left" | "right") => {
       const gY = groundAt(pt);
-      const yEye = Cesium.Cartesian3.fromDegrees(
+      const eyeAbs = gA + eyeHeight;
+      const targetAbs = gY + objectHeight;
+      // The line of sight runs from the driver eye to the object at Y (at the
+      // object height) — this is exactly the line the check tests.
+      const yTarget = Cesium.Cartesian3.fromDegrees(
         pt.lng,
         pt.lat,
-        gY + eyeHeight
+        targetAbs
       );
-      // Line of sight at eye level.
+      const res = resultFor(side);
+      const clear = !res || res.clear;
+      const losColor = clear ? green : red;
+
       viewer.entities.add({
-        polyline: { positions: [eye, yEye], width: 4, material: red },
+        polyline: { positions: [eye, yTarget], width: 5, material: losColor },
       });
-      // Obstruction curtain: object height → 2.0 m along the leg.
+      // Obstruction envelope curtain: object height → 2.0 m along the leg.
       viewer.entities.add({
         wall: {
           positions: Cesium.Cartesian3.fromDegreesArrayHeights([
@@ -213,9 +335,9 @@ export default function Cesium3DPanel({
           ]),
           maximumHeights: [gA + OBJECT_HEIGHT_MAX_M, gY + OBJECT_HEIGHT_MAX_M],
           minimumHeights: [gA + objectHeight, gY + objectHeight],
-          material: red.withAlpha(0.16),
+          material: losColor.withAlpha(0.12),
           outline: true,
-          outlineColor: red.withAlpha(0.7),
+          outlineColor: losColor.withAlpha(0.6),
         },
       });
       // Ground guide line.
@@ -226,32 +348,60 @@ export default function Cesium3DPanel({
             Cesium.Cartesian3.fromDegrees(pt.lng, pt.lat, gY),
           ],
           width: 2,
-          material: sky.withAlpha(0.8),
+          material: sky.withAlpha(0.7),
         },
       });
       // Y marker.
       viewer.entities.add({
-        position: yEye,
+        position: yTarget,
         point: {
-          pixelSize: 12,
-          color: red,
+          pixelSize: 11,
+          color: losColor,
           outlineColor: Cesium.Color.WHITE,
           outlineWidth: 2,
         },
         label: {
           text: `Y ${label} ${requiredY.toFixed(0)} m`,
           font: "700 13px system-ui, sans-serif",
-          fillColor: Cesium.Color.fromCssColorString("#fecaca"),
+          fillColor: Cesium.Color.fromCssColorString("#e2e8f0"),
           showBackground: true,
           backgroundColor: Cesium.Color.fromCssColorString("#0f172acc"),
           pixelOffset: new Cesium.Cartesian2(0, -22),
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
+      // Obstruction marker at the worst intrusion point.
+      if (res && !res.clear && res.worstIntrusionM > 0) {
+        const total = totalTo(pt);
+        const f = total > 0 ? res.worstDistM / total : 0;
+        const losH = eyeAbs + (targetAbs - eyeAbs) * f;
+        viewer.entities.add({
+          position: Cesium.Cartesian3.fromDegrees(
+            origin.lng + (pt.lng - origin.lng) * f,
+            origin.lat + (pt.lat - origin.lat) * f,
+            losH
+          ),
+          point: {
+            pixelSize: 14,
+            color: red,
+            outlineColor: Cesium.Color.WHITE,
+            outlineWidth: 2,
+          },
+          label: {
+            text: `⚠ blocked +${res.worstIntrusionM.toFixed(1)} m @ ${res.worstDistM.toFixed(0)} m`,
+            font: "700 12px system-ui, sans-serif",
+            fillColor: Cesium.Color.fromCssColorString("#fecaca"),
+            showBackground: true,
+            backgroundColor: Cesium.Color.fromCssColorString("#7f1d1dcc"),
+            pixelOffset: new Cesium.Cartesian2(0, 18),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        });
+      }
     };
 
-    if (left) drawLeg(left, "left (B)");
-    if (right) drawLeg(right, "right (C)");
+    if (left) drawLeg(left, "left (B)", "left");
+    if (right) drawLeg(right, "right (C)", "right");
 
     // Driver eye marker (the vehicle).
     viewer.entities.add({
@@ -275,7 +425,19 @@ export default function Cesium3DPanel({
 
     placeCamera(Cesium, viewer, eye, gA);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [origin, left, right, eyeHeight, objectHeight, requiredY, preset, lookDir]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    origin,
+    left,
+    right,
+    eyeHeight,
+    objectHeight,
+    requiredY,
+    preset,
+    lookDir,
+    checkLeft,
+    checkRight,
+  ]);
 
   function placeCamera(
     Cesium: Cesium,
@@ -409,7 +571,9 @@ export default function Cesium3DPanel({
         }
         if (destroyed) return;
         setStatus("ready");
-        redraw(); // drops the camera to the driver's eye
+        redraw();
+        // Run the automated line-of-sight test against the tile surface.
+        void runSightlineCheck();
       } catch (e) {
         if (destroyed) return;
         setStatus("error");
@@ -426,13 +590,15 @@ export default function Cesium3DPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey]);
 
-  // Re-sample ground + redraw when the geometry changes.
+  // Re-sample ground, redraw and re-run the check when the geometry changes.
   useEffect(() => {
     if (status !== "ready") return;
     let cancelled = false;
     (async () => {
       await sampleGround();
-      if (!cancelled) redraw();
+      if (cancelled) return;
+      redraw();
+      await runSightlineCheck();
     })();
     return () => {
       cancelled = true;
@@ -448,11 +614,19 @@ export default function Cesium3DPanel({
     right?.lng,
   ]);
 
-  // Redraw (no re-sample) when eye height, object height, preset or look changes.
+  // Eye/object height change the line of sight — redraw and re-run the check.
+  useEffect(() => {
+    if (status !== "ready") return;
+    redraw();
+    void runSightlineCheck();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eyeHeight, objectHeight]);
+
+  // Preset / look / required-Y only affect the view or labels — just redraw.
   useEffect(() => {
     if (status === "ready") redraw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eyeHeight, objectHeight, preset, lookDir, requiredY]);
+  }, [preset, lookDir, requiredY]);
 
   const hasBoth = !!(left && right);
 
@@ -537,16 +711,22 @@ export default function Cesium3DPanel({
         </button>
       </div>
 
-      {/* Caption */}
+      {/* Verdict panel */}
       {status === "ready" && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-2.5">
-          <div className="max-w-lg rounded-md border border-slate-600 bg-slate-900/90 px-3 py-1.5 text-center text-[11px] leading-4 text-slate-300 shadow-lg">
-            From the driver eye at {eyeHeight.toFixed(2)} m. Both sightlines are
-            drawn (red line) with the {objectHeight.toFixed(2)}–
-            {OBJECT_HEIGHT_MAX_M.toFixed(1)} m obstruction curtain. If a line
-            passes through a hedge, fence or building, that side is obstructed.
-            Use Look ◀ ▶ or drag to check each side.
+        <div className="pointer-events-none absolute left-2.5 top-16 w-60 rounded-lg border border-slate-600 bg-slate-900/90 p-3 text-xs shadow-xl">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="font-semibold uppercase tracking-wider text-slate-400">
+              Sightline check
+            </span>
+            {checking && <span className="text-slate-500">checking…</span>}
           </div>
+          <VerdictRow label="Left (A–B)" res={checkLeft} present={!!left} />
+          <VerdictRow label="Right (A–C)" res={checkRight} present={!!right} />
+          <p className="mt-2 leading-4 text-slate-500">
+            Eye {eyeHeight.toFixed(2)} m → object {objectHeight.toFixed(2)} m.
+            Tests the 3D-tile surface along each leg. Verify on site — tiles
+            include trees/parked cars and can be noisy.
+          </p>
         </div>
       )}
 
@@ -577,6 +757,44 @@ export default function Cesium3DPanel({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function VerdictRow({
+  label,
+  res,
+  present,
+}: {
+  label: string;
+  res: LegResult;
+  present: boolean;
+}) {
+  if (!present) return null;
+  let badge: { text: string; cls: string };
+  let detail: string | null = null;
+  if (res == null) {
+    badge = { text: "…", cls: "bg-slate-700 text-slate-300" };
+  } else if (res.incomplete) {
+    badge = { text: "NO DATA", cls: "bg-slate-600 text-slate-200" };
+    detail = "tiles not fully loaded here";
+  } else if (res.clear) {
+    badge = { text: "CLEAR", cls: "bg-green-500/25 text-green-300" };
+  } else {
+    badge = { text: "OBSTRUCTED", cls: "bg-red-500/25 text-red-300" };
+    detail = `rises ${res.worstIntrusionM.toFixed(1)} m above the line at ${res.worstDistM.toFixed(0)} m`;
+  }
+  return (
+    <div className="mb-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-slate-300">{label}</span>
+        <span
+          className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${badge.cls}`}
+        >
+          {badge.text}
+        </span>
+      </div>
+      {detail && <div className="mt-0.5 text-[10px] text-slate-500">{detail}</div>}
     </div>
   );
 }

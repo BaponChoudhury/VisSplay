@@ -45,19 +45,23 @@ survey.
 - `lib/export.ts` — PNG export (html2canvas capture + vector redraw +
   parameters block).
 
-## 3D driver's-eye view
+## 3D sightline check
 
-**🚗 3D driver's-eye view** (Tools) opens a CesiumJS panel using Google
-Photorealistic 3D Tiles. The camera sits **at the vehicle — Point A (the X
-setback) — at the driver eye height** (1.05–2.0 m, from the Sightline heights
-control). **Both** sightlines are drawn — the line of sight to the left Y point
-(B) and to the right Y point (C) — each with a translucent red "curtain" from
-the object height up to 2.0 m along the leg, so you can see whether a hedge,
-fence or building intersects either sightline. The driver looks ahead toward
-the junction by default; use **Look ◀ Left / Ahead / Right ▶** to snap the
-view to each side, or **Orbit** for a bird's-eye of the whole splay. Raising
-the eye height lifts the camera in place — it does not move the car. Clash
-judgement is visual in this phase.
+**🔎 3D sightline check** (Tools) opens a CesiumJS panel using Google
+Photorealistic 3D Tiles and runs an **automated line-of-sight test** on each
+splay leg. It samples the 3D-tile surface at ~1 m steps along A→B and A→C and
+checks whether anything (ground, hedge, fence, building) rises above the
+straight line from the driver eye (`ground + eye height`) to the object at Y
+(`ground + object height`). Each side is reported **CLEAR** or **OBSTRUCTED**,
+and when obstructed it gives the distance from Point A and how far the surface
+rises above the line. The sightlines are drawn over an orbit view (green =
+clear, red = obstructed) with a marker at the worst obstruction; a **Driver
+eye** preset is also available.
+
+Because the tiles are aerial photogrammetry, the *picture* is smeared at eye
+level and includes trees/parked cars, so treat the result as a desktop
+indicator and verify on site. Eye height and object height come from the
+**Sightline heights** control.
 
 > Requires the **Map Tiles API** enabled on the Google key. Cesium's runtime
 > assets are copied to `public/cesium` automatically on `npm install`
@@ -66,6 +70,6 @@ judgement is visual in this phase.
 ## Roadmap
 
 - **Phase 1** — 2D map splay tool ✅
-- **3D driver's-eye view** (CesiumJS + Google 3D Tiles) ✅
-- **Future** — automated line-of-sight testing against Environment Agency
-  LiDAR DSM
+- **3D automated sightline check** (CesiumJS + Google 3D Tiles) ✅
+- **Future** — line-of-sight testing against Environment Agency LiDAR DSM
+  (bare-earth + surface, less noisy than photogrammetry)

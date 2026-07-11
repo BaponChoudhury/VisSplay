@@ -474,18 +474,19 @@ export default function ControlPanel(props: Props) {
             onClick={props.onInspect3D}
             title={
               props.canInspect
-                ? "3D driver's-eye view from the car at the X setback, at eye height, along both sightlines"
+                ? "Automated line-of-sight test against Google 3D tiles, both legs"
                 : "Draw a splay (origin + at least one Y point) first"
             }
           >
-            🚗 3D driver’s-eye view
+            🔎 3D sightline check
           </button>
           {props.canInspect && (
             <p className="mt-1.5 text-xs leading-4 text-slate-500">
-              Opens beside the map with the camera at the car (Point A) at your
-              chosen eye height (1.05–2.0 m). Both sightlines are drawn; look
-              left / ahead / right to check each side is clear. Needs the Map
-              Tiles API.
+              Samples the Google 3D-tile surface along both legs (eye height →
+              object height) and reports <span className="text-green-400">CLEAR</span>{" "}
+              / <span className="text-red-400">OBSTRUCTED</span> per side, with a
+              coloured overview. A desktop indicator — verify on site. Needs the
+              Map Tiles API.
             </p>
           )}
         </div>
