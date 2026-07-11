@@ -485,8 +485,9 @@ export default function ControlPanel(props: Props) {
               Samples the Google 3D-tile surface along both legs (eye height →
               object height) and reports <span className="text-green-400">CLEAR</span>{" "}
               / <span className="text-red-400">OBSTRUCTED</span> per side, with a
-              coloured overview. A desktop indicator — verify on site. Needs the
-              Map Tiles API.
+              coloured overview. Also view from the driver’s seat — left / ahead
+              / right. A desktop indicator — verify on site. Needs the Map Tiles
+              API.
             </p>
           )}
         </div>

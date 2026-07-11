@@ -19,7 +19,7 @@
  * add automated line-of-sight testing against Environment Agency LiDAR DSM.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { LatLng } from "@/lib/types";
 import { OBJECT_HEIGHT_MAX_M } from "@/lib/standards";
 
@@ -67,8 +67,9 @@ function loadCesium(): Promise<Cesium> {
   });
 }
 
-type Preset = "driver" | "orbit";
-type LookDir = "ahead" | "left" | "right";
+// The camera view: an overhead orbit, or from the driver's seat looking left
+// (toward B), straight ahead (toward the junction), or right (toward C).
+type ViewMode = "orbit" | "seat-left" | "seat-ahead" | "seat-right";
 
 /** Result of the automated line-of-sight test along one splay leg. */
 type LegResult = {
@@ -115,8 +116,7 @@ export default function Cesium3DPanel({
     "loading"
   );
   const [error, setError] = useState<string | null>(null);
-  const [preset, setPreset] = useState<Preset>("orbit");
-  const [lookDir, setLookDir] = useState<LookDir>("ahead");
+  const [view, setView] = useState<ViewMode>("orbit");
   const [checking, setChecking] = useState(false);
   const [checkLeft, setCheckLeft] = useState<LegResult>(null);
   const [checkRight, setCheckRight] = useState<LegResult>(null);
@@ -425,7 +425,6 @@ export default function Cesium3DPanel({
 
     placeCamera(Cesium, viewer, eye, gA);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     origin,
     left,
@@ -433,8 +432,7 @@ export default function Cesium3DPanel({
     eyeHeight,
     objectHeight,
     requiredY,
-    preset,
-    lookDir,
+    view,
     checkLeft,
     checkRight,
   ]);
@@ -445,19 +443,19 @@ export default function Cesium3DPanel({
     eye: Cartesian3,
     gA: number
   ) {
-    if (preset === "driver") {
-      // Only drop to the driver's eye once we actually know the road-surface
+    if (view !== "orbit") {
+      // Driver's seat. Only drop to eye level once we know the road-surface
       // height; otherwise the camera would sit at the wrong altitude. Fall back
       // to the overview until the tiles have streamed in.
       if (!groundRef.current.has(key(origin))) {
         frameArea();
         return;
       }
-      // Choose what the driver looks at: the chosen leg, or (ahead) the
-      // mid-point between the two Y points — i.e. toward the junction.
+      // What the driver looks at: the left leg (B), the right leg (C), or —
+      // ahead — the mid-point between the two Y points (toward the junction).
       let look: LatLng | null = null;
-      if (lookDir === "left") look = left;
-      else if (lookDir === "right") look = right;
+      if (view === "seat-left") look = left;
+      else if (view === "seat-right") look = right;
       else look = left && right ? midpoint(left, right) : left ?? right;
       if (!look) return;
       const gL = groundRef.current.get(key(look)) ?? gA;
@@ -622,11 +620,11 @@ export default function Cesium3DPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eyeHeight, objectHeight]);
 
-  // Preset / look / required-Y only affect the view or labels — just redraw.
+  // View / required-Y only affect the camera or labels — just redraw.
   useEffect(() => {
     if (status === "ready") redraw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preset, lookDir, requiredY]);
+  }, [view, requiredY]);
 
   const hasBoth = !!(left && right);
 
@@ -636,72 +634,48 @@ export default function Cesium3DPanel({
 
       {/* Header controls */}
       <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-2.5">
-        <div className="pointer-events-auto flex flex-wrap gap-2">
+        <div className="pointer-events-auto flex flex-wrap items-center gap-2">
           <div className="flex overflow-hidden rounded-md border border-slate-600 bg-slate-900/90 shadow-lg">
             <button
-              onClick={() => setPreset("driver")}
+              onClick={() => setView("orbit")}
               className={`px-3 py-1.5 text-sm font-medium ${
-                preset === "driver"
+                view === "orbit"
                   ? "bg-sky-600 text-white"
                   : "text-slate-300 hover:bg-slate-700"
               }`}
             >
-              Driver eye
-            </button>
-            <button
-              onClick={() => setPreset("orbit")}
-              className={`border-l border-slate-600 px-3 py-1.5 text-sm font-medium ${
-                preset === "orbit"
-                  ? "bg-sky-600 text-white"
-                  : "text-slate-300 hover:bg-slate-700"
-              }`}
-            >
-              Orbit
+              🛰 Orbit
             </button>
           </div>
-          {preset === "driver" && (
-            <div className="flex overflow-hidden rounded-md border border-slate-600 bg-slate-900/90 shadow-lg">
-              <span className="px-2.5 py-1.5 text-xs font-semibold text-slate-400">
-                Look
-              </span>
-              {left && (
-                <button
-                  onClick={() => setLookDir("left")}
-                  className={`border-l border-slate-600 px-2.5 py-1.5 text-sm font-medium ${
-                    lookDir === "left"
-                      ? "bg-sky-600 text-white"
-                      : "text-slate-300 hover:bg-slate-700"
-                  }`}
-                >
-                  ◀ Left
-                </button>
-              )}
-              {hasBoth && (
-                <button
-                  onClick={() => setLookDir("ahead")}
-                  className={`border-l border-slate-600 px-2.5 py-1.5 text-sm font-medium ${
-                    lookDir === "ahead"
-                      ? "bg-sky-600 text-white"
-                      : "text-slate-300 hover:bg-slate-700"
-                  }`}
-                >
-                  Ahead
-                </button>
-              )}
-              {right && (
-                <button
-                  onClick={() => setLookDir("right")}
-                  className={`border-l border-slate-600 px-2.5 py-1.5 text-sm font-medium ${
-                    lookDir === "right"
-                      ? "bg-sky-600 text-white"
-                      : "text-slate-300 hover:bg-slate-700"
-                  }`}
-                >
-                  Right ▶
-                </button>
-              )}
-            </div>
-          )}
+          <div className="flex overflow-hidden rounded-md border border-slate-600 bg-slate-900/90 shadow-lg">
+            <span className="px-2.5 py-1.5 text-xs font-semibold text-slate-400">
+              Driver’s seat
+            </span>
+            {left && (
+              <ViewBtn
+                active={view === "seat-left"}
+                onClick={() => setView("seat-left")}
+              >
+                ◀ Left
+              </ViewBtn>
+            )}
+            {hasBoth && (
+              <ViewBtn
+                active={view === "seat-ahead"}
+                onClick={() => setView("seat-ahead")}
+              >
+                Ahead
+              </ViewBtn>
+            )}
+            {right && (
+              <ViewBtn
+                active={view === "seat-right"}
+                onClick={() => setView("seat-right")}
+              >
+                Right ▶
+              </ViewBtn>
+            )}
+          </div>
         </div>
         <button
           onClick={onClose}
@@ -758,6 +732,27 @@ export default function Cesium3DPanel({
         </div>
       )}
     </div>
+  );
+}
+
+function ViewBtn({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`border-l border-slate-600 px-2.5 py-1.5 text-sm font-medium ${
+        active ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-700"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 

@@ -1,0 +1,31 @@
+
+> splaycheck@0.1.0 dev
+> next dev
+
+  ▲ Next.js 14.2.35
+  - Local:        http://localhost:3000
+  - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 9.6s
+ ○ Compiling / ...
+ ✓ Compiled / in 50.3s (494 modules)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET / 200 in 51604ms
+ GET / 200 in 2449ms
+ GET /_next/static/webpack/5b68724278e5c5ea.webpack.hot-update.json 404 in 52008ms
+ GET / 200 in 162ms
+ GET / 200 in 91ms
+ ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+ GET /_next/static/webpack/5b68724278e5c5ea.webpack.hot-update.json 404 in 122ms
+ GET / 200 in 119ms
+ ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+ ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+ ✓ Compiled in 132.7s (491 modules)
+ GET / 200 in 13254ms
+ ✓ Compiled in 6.9s (491 modules)
+ ✓ Compiled in 4.6s (491 modules)
+ ✓ Compiled in 1303ms (491 modules)
+ ✓ Compiled in 3.4s (491 modules)
+ ✓ Compiled in 2.2s (491 modules)
+ GET / 200 in 467ms
