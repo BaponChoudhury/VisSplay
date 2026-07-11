@@ -552,6 +552,8 @@ export default function Cesium3DPanel({
       try {
         const tileset = await Cesium.createGooglePhotorealistic3DTileset();
         if (destroyed) return;
+        // Load finer tiles (default is 16; lower = more detail, slower/heavier).
+        tileset.maximumScreenSpaceError = 8;
         viewer.scene.primitives.add(tileset);
 
         // Show the junction from above straight away so the user sees the area
