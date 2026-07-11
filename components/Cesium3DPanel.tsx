@@ -112,25 +112,62 @@ export default function Cesium3DPanel({
   });
 
   // ---- sample the road-surface height at the splay points -----------------
+  // Returns true once the origin (driver) height is known, so the caller can
+  // wait for the tiles to stream in before dropping the camera to eye level.
   const sampleGround = useCallback(async (): Promise<boolean> => {
     const Cesium = cesiumRef.current;
     const viewer = viewerRef.current;
     if (!Cesium || !viewer) return false;
+    const scene = viewer.scene;
+    const pts = [origin, left, right].filter(Boolean) as LatLng[];
+    try {
+      if (scene.sampleHeightSupported) {
+        // Preferred on the 3D tiles: returns cartographics with height set.
+        const cartos = pts.map((p) =>
+          Cesium.Cartographic.fromDegrees(p.lng, p.lat)
+        );
+        const updated = await scene.sampleHeightMostDetailed(cartos);
+        updated.forEach((c, i) => {
+          if (c && Number.isFinite(c.height))
+            groundRef.current.set(key(pts[i]), c.height);
+        });
+      } else {
+        const cartesians = pts.map((p) =>
+          Cesium.Cartesian3.fromDegrees(p.lng, p.lat, 0)
+        );
+        const clamped = await scene.clampToHeightMostDetailed(cartesians);
+        clamped.forEach((c: Cartesian3 | undefined, i: number) => {
+          if (c)
+            groundRef.current.set(
+              key(pts[i]),
+              Cesium.Cartographic.fromCartesian(c).height
+            );
+        });
+      }
+    } catch {
+      /* leave heights unset; caller retries */
+    }
+    return groundRef.current.has(key(origin));
+  }, [origin, left, right]);
+
+  /** Frame the whole splay from above so tiles start streaming immediately. */
+  const frameArea = useCallback(() => {
+    const Cesium = cesiumRef.current;
+    const viewer = viewerRef.current;
+    if (!Cesium || !viewer) return;
     const pts = [origin, left, right].filter(Boolean) as LatLng[];
     const cartesians = pts.map((p) =>
       Cesium.Cartesian3.fromDegrees(p.lng, p.lat, 0)
     );
-    try {
-      const clamped = await viewer.scene.clampToHeightMostDetailed(cartesians);
-      clamped.forEach((c: Cartesian3 | undefined, i: number) => {
-        if (!c) return;
-        const carto = Cesium.Cartographic.fromCartesian(c);
-        groundRef.current.set(key(pts[i]), carto.height);
-      });
-      return true;
-    } catch {
-      return false;
-    }
+    const sphere = Cesium.BoundingSphere.fromPoints(cartesians);
+    viewer.camera.flyToBoundingSphere(sphere, {
+      duration: 0,
+      offset: new Cesium.HeadingPitchRange(
+        0,
+        Cesium.Math.toRadians(-45),
+        Math.max(120, sphere.radius * 3)
+      ),
+    });
   }, [origin, left, right]);
 
   // ---- draw both sightlines + envelopes and place the camera --------------
@@ -247,6 +284,13 @@ export default function Cesium3DPanel({
     gA: number
   ) {
     if (preset === "driver") {
+      // Only drop to the driver's eye once we actually know the road-surface
+      // height; otherwise the camera would sit at the wrong altitude. Fall back
+      // to the overview until the tiles have streamed in.
+      if (!groundRef.current.has(key(origin))) {
+        frameArea();
+        return;
+      }
       // Choose what the driver looks at: the chosen leg, or (ahead) the
       // mid-point between the two Y points — i.e. toward the junction.
       let look: LatLng | null = null;
@@ -349,10 +393,23 @@ export default function Cesium3DPanel({
         const tileset = await Cesium.createGooglePhotorealistic3DTileset();
         if (destroyed) return;
         viewer.scene.primitives.add(tileset);
-        await sampleGround();
+
+        // Show the junction from above straight away so the user sees the area
+        // while the detailed tiles stream in.
+        frameArea();
+
+        // The tile-surface height sampling only works once the tiles at the
+        // point have loaded, which can take a few seconds. Retry until the
+        // driver's ground height is known (or we give up and use the estimate).
+        let gotGround = false;
+        for (let attempt = 0; attempt < 8 && !destroyed; attempt++) {
+          gotGround = await sampleGround();
+          if (gotGround) break;
+          await new Promise((r) => setTimeout(r, 900));
+        }
         if (destroyed) return;
         setStatus("ready");
-        redraw();
+        redraw(); // drops the camera to the driver's eye
       } catch (e) {
         if (destroyed) return;
         setStatus("error");
@@ -494,8 +551,14 @@ export default function Cesium3DPanel({
       )}
 
       {status === "loading" && (
-        <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 text-sm text-slate-400">
-          Loading Google 3D tiles…
+        <div className="pointer-events-none absolute inset-x-0 top-1/2 flex -translate-y-1/2 justify-center">
+          <div className="rounded-md bg-slate-950/80 px-4 py-2 text-center text-sm text-slate-300">
+            Loading Google 3D tiles and finding the road surface…
+            <br />
+            <span className="text-xs text-slate-500">
+              a few seconds — the camera drops to eye level once ready
+            </span>
+          </div>
         </div>
       )}
       {status === "error" && (
