@@ -83,7 +83,7 @@ type LegResult = {
 } | null;
 
 /** Tolerance (m) — surface must rise this far above the line to count as a block. */
-const INTRUSION_TOLERANCE_M = 0.1;
+const INTRUSION_TOLERANCE_M = 0.2;
 
 interface Props {
   apiKey: string;
@@ -198,21 +198,19 @@ export default function Cesium3DPanel({
       const Cesium = cesiumRef.current;
       const viewer = viewerRef.current;
       if (!Cesium || !viewer) return null;
-      if (!groundRef.current.has(key(origin)) || !groundRef.current.has(key(pt)))
-        return { clear: true, worstDistM: 0, worstIntrusionM: 0, incomplete: true };
 
-      const gA = groundAt(origin);
-      const gY = groundAt(pt);
-      const eyeAbs = gA + eyeHeight;
-      const targetAbs = gY + objectHeight;
       const totalM = Cesium.Cartesian3.distance(
         Cesium.Cartesian3.fromDegrees(origin.lng, origin.lat, 0),
         Cesium.Cartesian3.fromDegrees(pt.lng, pt.lat, 0)
       );
-      const steps = Math.min(80, Math.max(12, Math.round(totalM)));
+      // Sample endpoints AND the interior in one pass so the eye/target ground
+      // and the surface along the line come from the same tiles at the same
+      // detail — otherwise a coarse start-up ground vs finer line samples make
+      // everything read as blocked.
+      const steps = Math.min(100, Math.max(12, Math.round(totalM)));
       const fracs: number[] = [];
       const cartos: import("cesium").Cartographic[] = [];
-      for (let i = 1; i < steps; i++) {
+      for (let i = 0; i <= steps; i++) {
         const f = i / steps;
         fracs.push(f);
         cartos.push(
@@ -241,32 +239,71 @@ export default function Cesium3DPanel({
         return { clear: true, worstDistM: 0, worstIntrusionM: 0, incomplete: true };
       }
 
-      let worstIntr = -Infinity;
-      let worstDist = 0;
-      let missing = 0;
-      sampled.forEach((c, i) => {
-        if (!c || !Number.isFinite(c.height)) {
-          missing++;
-          return;
-        }
-        const f = fracs[i];
-        const losH = eyeAbs + (targetAbs - eyeAbs) * f;
-        const intr = c.height - losH;
-        if (intr > worstIntr) {
-          worstIntr = intr;
-          worstDist = f * totalM;
-        }
-      });
-      if (worstIntr === -Infinity)
+      const hA = sampled[0]?.height;
+      const hY = sampled[steps]?.height;
+      if (!Number.isFinite(hA) || !Number.isFinite(hY))
         return { clear: true, worstDistM: 0, worstIntrusionM: 0, incomplete: true };
+      // Keep the cached ground consistent with this pass (drives the camera).
+      groundRef.current.set(key(origin), hA as number);
+      groundRef.current.set(key(pt), hY as number);
+
+      const eyeAbs = (hA as number) + eyeHeight;
+      const targetAbs = (hY as number) + objectHeight;
+
+      // Intrusion (surface above the line of sight) at each interior sample.
+      const intr: (number | null)[] = [];
+      let missing = 0;
+      for (let i = 1; i < steps; i++) {
+        const c = sampled[i];
+        if (!c || !Number.isFinite(c.height)) {
+          intr.push(null);
+          missing++;
+          continue;
+        }
+        const losH = eyeAbs + (targetAbs - eyeAbs) * fracs[i];
+        intr.push(c.height - losH);
+      }
+
+      // Only count a SUSTAINED intrusion (a real hedge/wall/bank), ignoring
+      // isolated single-sample spikes from mesh noise, signs, poles or a lone
+      // parked car. Steps are ~1 m, so require at least ~2 m of continuous rise.
+      const stepM = totalM / steps;
+      const minRunSamples = Math.max(2, Math.round(1.8 / stepM));
+      let worstIntr = 0;
+      let worstDist = 0;
+      let run = 0;
+      let runMax = 0;
+      let runMaxIdx = 0;
+      const closeRun = () => {
+        if (run >= minRunSamples && runMax > worstIntr) {
+          worstIntr = runMax;
+          worstDist = (fracs[runMaxIdx] ?? 0) * totalM;
+        }
+        run = 0;
+        runMax = 0;
+      };
+      for (let i = 0; i < intr.length; i++) {
+        const v = intr[i];
+        if (v != null && v > INTRUSION_TOLERANCE_M) {
+          if (v > runMax) {
+            runMax = v;
+            runMaxIdx = i + 1; // interior index i maps to fracs[i+1]
+          }
+          run++;
+        } else {
+          closeRun();
+        }
+      }
+      closeRun();
+
       return {
         clear: worstIntr <= INTRUSION_TOLERANCE_M,
         worstDistM: worstDist,
         worstIntrusionM: Math.max(0, worstIntr),
-        incomplete: missing > sampled.length * 0.3,
+        incomplete: missing > (steps - 1) * 0.3,
       };
     },
-    [origin, left, right, eyeHeight, objectHeight]
+    [origin, eyeHeight, objectHeight]
   );
 
   const runSightlineCheck = useCallback(async () => {
