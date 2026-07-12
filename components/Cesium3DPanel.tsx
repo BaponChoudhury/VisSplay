@@ -85,6 +85,35 @@ type LegResult = {
 /** Tolerance (m) — surface must rise this far above the line to count as a block. */
 const INTRUSION_TOLERANCE_M = 0.2;
 
+/**
+ * Ring of points (metres, east/north offsets) sampled around a splay vertex.
+ * We take the LOWEST surface across the ring as the road level — this ducks
+ * under walls, kerbs, parked cars and tree canopy that a single point at the
+ * vertex would otherwise hit (there's no bare-earth in photogrammetry tiles).
+ */
+const GROUND_RING_M = 3;
+const GROUND_RING_OFFSETS: [number, number][] = [
+  [0, 0],
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+  [1, 1],
+  [-1, -1],
+  [1, -1],
+  [-1, 1],
+];
+
+/** Lat/lng points on the ground ring around a point (for min-surface sampling). */
+function ringPoints(p: LatLng): LatLng[] {
+  const mPerLat = 111320;
+  const mPerLng = 111320 * Math.cos((p.lat * Math.PI) / 180);
+  return GROUND_RING_OFFSETS.map(([de, dn]) => ({
+    lat: p.lat + (dn * GROUND_RING_M) / mPerLat,
+    lng: p.lng + (de * GROUND_RING_M) / mPerLng,
+  }));
+}
+
 interface Props {
   apiKey: string;
   origin: LatLng;
@@ -130,44 +159,72 @@ export default function Cesium3DPanel({
   const resultFor = (side: "left" | "right") =>
     side === "left" ? checkLeft : checkRight;
 
-  // ---- sample the road-surface height at the splay points -----------------
-  // Returns true once the origin (driver) height is known, so the caller can
-  // wait for the tiles to stream in before dropping the camera to eye level.
-  const sampleGround = useCallback(async (): Promise<boolean> => {
-    const Cesium = cesiumRef.current;
-    const viewer = viewerRef.current;
-    if (!Cesium || !viewer) return false;
-    const scene = viewer.scene;
-    const pts = [origin, left, right].filter(Boolean) as LatLng[];
-    try {
-      if (scene.sampleHeightSupported) {
-        // Preferred on the 3D tiles: returns cartographics with height set.
-        const cartos = pts.map((p) =>
-          Cesium.Cartographic.fromDegrees(p.lng, p.lat)
-        );
-        const updated = await scene.sampleHeightMostDetailed(cartos);
-        updated.forEach((c, i) => {
-          if (c && Number.isFinite(c.height))
-            groundRef.current.set(key(pts[i]), c.height);
-        });
-      } else {
+  // ---- sample surface heights (batched) -----------------------------------
+  // Returns the surface height for each requested point, or null where the
+  // tiles couldn't be sampled. One batched call keeps everything at the same
+  // detail/time (avoids coarse-vs-fine mismatches).
+  const sampleHeights = useCallback(
+    async (pts: LatLng[]): Promise<(number | null)[]> => {
+      const Cesium = cesiumRef.current;
+      const viewer = viewerRef.current;
+      if (!Cesium || !viewer || pts.length === 0) return pts.map(() => null);
+      const scene = viewer.scene;
+      try {
+        if (scene.sampleHeightSupported) {
+          const cartos = pts.map((p) =>
+            Cesium.Cartographic.fromDegrees(p.lng, p.lat)
+          );
+          const updated = await scene.sampleHeightMostDetailed(cartos);
+          return updated.map((c) =>
+            c && Number.isFinite(c.height) ? c.height : null
+          );
+        }
         const cartesians = pts.map((p) =>
           Cesium.Cartesian3.fromDegrees(p.lng, p.lat, 0)
         );
         const clamped = await scene.clampToHeightMostDetailed(cartesians);
-        clamped.forEach((c: Cartesian3 | undefined, i: number) => {
-          if (c)
-            groundRef.current.set(
-              key(pts[i]),
-              Cesium.Cartographic.fromCartesian(c).height
-            );
-        });
+        return clamped.map((c: Cartesian3 | undefined) =>
+          c ? Cesium.Cartographic.fromCartesian(c).height : null
+        );
+      } catch {
+        return pts.map(() => null);
       }
-    } catch {
-      /* leave heights unset; caller retries */
-    }
+    },
+    []
+  );
+
+  /**
+   * Road-surface height at a vertex: the LOWEST surface across a small ring, so
+   * a wall/kerb/parked car/canopy at the exact point doesn't lift the "ground".
+   */
+  const roadHeights = useCallback(
+    async (pts: LatLng[]): Promise<(number | null)[]> => {
+      const flat: LatLng[] = [];
+      pts.forEach((p) => flat.push(...ringPoints(p)));
+      const h = await sampleHeights(flat);
+      const n = GROUND_RING_OFFSETS.length;
+      return pts.map((_, i) => {
+        let min = Infinity;
+        for (let j = 0; j < n; j++) {
+          const v = h[i * n + j];
+          if (v != null && v < min) min = v;
+        }
+        return Number.isFinite(min) ? min : null;
+      });
+    },
+    [sampleHeights]
+  );
+
+  // Populate the cached ground heights (drives the camera). Returns true once
+  // the origin (driver) height is known.
+  const sampleGround = useCallback(async (): Promise<boolean> => {
+    const pts = [origin, left, right].filter(Boolean) as LatLng[];
+    const heights = await roadHeights(pts);
+    pts.forEach((p, i) => {
+      if (heights[i] != null) groundRef.current.set(key(p), heights[i] as number);
+    });
     return groundRef.current.has(key(origin));
-  }, [origin, left, right]);
+  }, [origin, left, right, roadHeights]);
 
   /** Frame the whole splay from above so tiles start streaming immediately. */
   const frameArea = useCallback(() => {
@@ -190,9 +247,10 @@ export default function Cesium3DPanel({
   }, [origin, left, right]);
 
   // ---- automated line-of-sight test along a leg ---------------------------
-  // Samples the 3D-tile surface at ~1 m steps along A→Y and checks whether it
-  // rises above the straight line from the driver eye (ground_A + eye height)
-  // to the object at Y (ground_Y + object height). Reports the worst intrusion.
+  // Eye = road_A + eye height, target = road_Y + object height (road heights via
+  // the low ring, so walls/kerbs/cars at the vertices don't lift them). Samples
+  // the tile surface at ~1 m steps along A→Y and reports the worst SUSTAINED
+  // rise of the surface above that line of sight.
   const checkLeg = useCallback(
     async (pt: LatLng): Promise<LegResult> => {
       const Cesium = cesiumRef.current;
@@ -203,66 +261,40 @@ export default function Cesium3DPanel({
         Cesium.Cartesian3.fromDegrees(origin.lng, origin.lat, 0),
         Cesium.Cartesian3.fromDegrees(pt.lng, pt.lat, 0)
       );
-      // Sample endpoints AND the interior in one pass so the eye/target ground
-      // and the surface along the line come from the same tiles at the same
-      // detail — otherwise a coarse start-up ground vs finer line samples make
-      // everything read as blocked.
       const steps = Math.min(100, Math.max(12, Math.round(totalM)));
       const fracs: number[] = [];
-      const cartos: import("cesium").Cartographic[] = [];
-      for (let i = 0; i <= steps; i++) {
+      const interior: LatLng[] = [];
+      for (let i = 1; i < steps; i++) {
         const f = i / steps;
         fracs.push(f);
-        cartos.push(
-          Cesium.Cartographic.fromDegrees(
-            origin.lng + (pt.lng - origin.lng) * f,
-            origin.lat + (pt.lat - origin.lat) * f
-          )
-        );
+        interior.push({
+          lat: origin.lat + (pt.lat - origin.lat) * f,
+          lng: origin.lng + (pt.lng - origin.lng) * f,
+        });
       }
 
-      let sampled: (import("cesium").Cartographic | undefined)[] = [];
-      try {
-        if (viewer.scene.sampleHeightSupported) {
-          sampled = await viewer.scene.sampleHeightMostDetailed(cartos);
-        } else {
-          const cs = await viewer.scene.clampToHeightMostDetailed(
-            cartos.map((c) =>
-              Cesium.Cartesian3.fromRadians(c.longitude, c.latitude, 0)
-            )
-          );
-          sampled = cs.map((c: Cartesian3 | undefined) =>
-            c ? Cesium.Cartographic.fromCartesian(c) : undefined
-          );
-        }
-      } catch {
+      // One pass: the low ring around A, the low ring around Y, then the line.
+      const aRing = ringPoints(origin);
+      const yRing = ringPoints(pt);
+      const n = GROUND_RING_OFFSETS.length;
+      const heights = await sampleHeights([...aRing, ...yRing, ...interior]);
+
+      const minOf = (arr: (number | null)[]) => {
+        let m = Infinity;
+        for (const v of arr) if (v != null && v < m) m = v;
+        return Number.isFinite(m) ? m : null;
+      };
+      const gA = minOf(heights.slice(0, n));
+      const gY = minOf(heights.slice(n, 2 * n));
+      if (gA == null || gY == null)
         return { clear: true, worstDistM: 0, worstIntrusionM: 0, incomplete: true };
-      }
+      // Keep the cached ground consistent (drives the driver-eye camera).
+      groundRef.current.set(key(origin), gA);
+      groundRef.current.set(key(pt), gY);
 
-      const hA = sampled[0]?.height;
-      const hY = sampled[steps]?.height;
-      if (!Number.isFinite(hA) || !Number.isFinite(hY))
-        return { clear: true, worstDistM: 0, worstIntrusionM: 0, incomplete: true };
-      // Keep the cached ground consistent with this pass (drives the camera).
-      groundRef.current.set(key(origin), hA as number);
-      groundRef.current.set(key(pt), hY as number);
-
-      const eyeAbs = (hA as number) + eyeHeight;
-      const targetAbs = (hY as number) + objectHeight;
-
-      // Intrusion (surface above the line of sight) at each interior sample.
-      const intr: (number | null)[] = [];
-      let missing = 0;
-      for (let i = 1; i < steps; i++) {
-        const c = sampled[i];
-        if (!c || !Number.isFinite(c.height)) {
-          intr.push(null);
-          missing++;
-          continue;
-        }
-        const losH = eyeAbs + (targetAbs - eyeAbs) * fracs[i];
-        intr.push(c.height - losH);
-      }
+      const eyeAbs = gA + eyeHeight;
+      const targetAbs = gY + objectHeight;
+      const lineVals = heights.slice(2 * n); // one per interior fraction
 
       // Only count a SUSTAINED intrusion (a real hedge/wall/bank), ignoring
       // isolated single-sample spikes from mesh noise, signs, poles or a lone
@@ -273,21 +305,29 @@ export default function Cesium3DPanel({
       let worstDist = 0;
       let run = 0;
       let runMax = 0;
-      let runMaxIdx = 0;
+      let runMaxJ = 0;
+      let missing = 0;
       const closeRun = () => {
         if (run >= minRunSamples && runMax > worstIntr) {
           worstIntr = runMax;
-          worstDist = (fracs[runMaxIdx] ?? 0) * totalM;
+          worstDist = fracs[runMaxJ] * totalM;
         }
         run = 0;
         runMax = 0;
       };
-      for (let i = 0; i < intr.length; i++) {
-        const v = intr[i];
-        if (v != null && v > INTRUSION_TOLERANCE_M) {
-          if (v > runMax) {
-            runMax = v;
-            runMaxIdx = i + 1; // interior index i maps to fracs[i+1]
+      for (let j = 0; j < lineVals.length; j++) {
+        const surf = lineVals[j];
+        if (surf == null) {
+          missing++;
+          closeRun();
+          continue;
+        }
+        const losH = eyeAbs + (targetAbs - eyeAbs) * fracs[j];
+        const intr = surf - losH;
+        if (intr > INTRUSION_TOLERANCE_M) {
+          if (intr > runMax) {
+            runMax = intr;
+            runMaxJ = j;
           }
           run++;
         } else {
@@ -300,10 +340,10 @@ export default function Cesium3DPanel({
         clear: worstIntr <= INTRUSION_TOLERANCE_M,
         worstDistM: worstDist,
         worstIntrusionM: Math.max(0, worstIntr),
-        incomplete: missing > (steps - 1) * 0.3,
+        incomplete: missing > lineVals.length * 0.3,
       };
     },
-    [origin, eyeHeight, objectHeight]
+    [origin, eyeHeight, objectHeight, sampleHeights]
   );
 
   const runSightlineCheck = useCallback(async () => {
