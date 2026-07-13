@@ -15,6 +15,7 @@ import {
   ssdForSpeed,
 } from "@/lib/standards";
 import type {
+  DesignOverlaySettings,
   LatLng,
   SavedAssessment,
   SplayParams,
@@ -23,6 +24,10 @@ import type {
 } from "@/lib/types";
 import { assessmentStore, newAssessmentId } from "@/lib/storage";
 import { exportSplayPng } from "@/lib/export";
+import {
+  createDesignOverlay,
+  type DesignOverlayHandle,
+} from "@/lib/designOverlay";
 import dynamic from "next/dynamic";
 import ControlPanel from "./ControlPanel";
 
@@ -63,6 +68,12 @@ const UK_CENTER: LatLng = { lat: 52.8, lng: -1.9 };
 /** Small tolerance so a handle snapped to exactly Y reads as a pass. */
 const PASS_TOLERANCE_M = 0.05;
 
+/** Placeholder height/width ratio until the uploaded plan image has loaded. */
+const DEFAULT_DESIGN_ASPECT = 0.7;
+
+/** Data URLs beyond this may blow the localStorage quota when saving. */
+const DESIGN_SAVE_WARN_BYTES = 3_000_000;
+
 const VERTEX_COLORS: Record<VertexKey, string> = {
   mouth: "#e2e8f0", // slate-200
   origin: "#f59e0b", // amber-500
@@ -99,6 +110,11 @@ export default function SplayCheckApp() {
   const measureLineRef = useRef<google.maps.Polyline | null>(null);
   const measurePtsRef = useRef<LatLng[]>([]);
   const searchInitRef = useRef(false);
+  const designOverlayRef = useRef<DesignOverlayHandle | null>(null);
+  const designHandlesRef = useRef<{
+    move: google.maps.Marker | null;
+    corner: google.maps.Marker | null;
+  }>({ move: null, corner: null });
 
   const [mapReady, setMapReady] = useState(false);
   const [mode, setMode] = useState<Mode>("manual");
@@ -119,6 +135,11 @@ export default function SplayCheckApp() {
   // 3D driver's-eye view (Phase 3).
   const [threeDOpen, setThreeDOpen] = useState(false);
 
+  // Superimposed design layout (proposed junction plan drawn over the map).
+  const [design, setDesign] = useState<DesignOverlaySettings | null>(null);
+  const [designAdjust, setDesignAdjust] = useState(false);
+  const [designAspect, setDesignAspect] = useState<number | null>(null);
+
   // Latest-state ref so persistent map listeners never see stale closures.
   const liveRef = useRef({
     step,
@@ -128,6 +149,9 @@ export default function SplayCheckApp() {
     points,
     params,
     threeDOpen,
+    design,
+    designAspect,
+    designAdjust,
   });
   liveRef.current = {
     step,
@@ -137,6 +161,9 @@ export default function SplayCheckApp() {
     points,
     params,
     threeDOpen,
+    design,
+    designAspect,
+    designAdjust,
   };
 
   // ---------------------------------------------------------------- results
@@ -570,6 +597,125 @@ export default function SplayCheckApp() {
     });
   }, [mapReady, points, params.yRequired]);
 
+  // -------------------------------------------- design overlay lifecycle
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map) return;
+    if (!design) {
+      designOverlayRef.current?.remove();
+      designOverlayRef.current = null;
+      return;
+    }
+    if (!designOverlayRef.current) {
+      designOverlayRef.current = createDesignOverlay(map, design, setDesignAspect);
+    } else {
+      designOverlayRef.current.update(design);
+    }
+  }, [mapReady, design]);
+
+  // Adjust handles: a round centre handle moves the plan; a square corner
+  // handle rotates and scales it (bearing sets rotation, distance sets width).
+  useEffect(() => {
+    const map = mapRef.current;
+    const handles = designHandlesRef.current;
+    const clearHandles = () => {
+      handles.move?.setMap(null);
+      handles.corner?.setMap(null);
+      handles.move = null;
+      handles.corner = null;
+    };
+    if (!mapReady || !map || !design || !designAdjust || !design.visible) {
+      clearHandles();
+      return;
+    }
+    const aspect = designAspect ?? DEFAULT_DESIGN_ASPECT;
+    // Bearing (from north) of the top-right image corner before rotation.
+    const cornerBearing = (Math.atan2(1, aspect) * 180) / Math.PI;
+    const halfDiag = 0.5 * design.widthM * Math.sqrt(1 + aspect * aspect);
+
+    if (!handles.move) {
+      const m = new google.maps.Marker({
+        map,
+        draggable: true,
+        cursor: "move",
+        zIndex: 40,
+        title: "Drag to move the design layout",
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 8,
+          fillColor: "#a855f7",
+          fillOpacity: 0.9,
+          strokeColor: "#ffffff",
+          strokeWeight: 2,
+        },
+        label: {
+          text: "move plan",
+          color: "#d8b4fe",
+          fontSize: "11px",
+          fontWeight: "600",
+          className: "splay-handle-label",
+        },
+      });
+      m.addListener("drag", (e: google.maps.MapMouseEvent) => {
+        if (!e.latLng) return;
+        const pos = e.latLng.toJSON();
+        setDesign((prev) => (prev ? { ...prev, center: pos } : prev));
+      });
+      handles.move = m;
+    }
+    if (!handles.corner) {
+      const m = new google.maps.Marker({
+        map,
+        draggable: true,
+        cursor: "nesw-resize",
+        zIndex: 40,
+        title: "Drag to rotate and scale the design layout",
+        icon: {
+          path: "M -1,-1 L 1,-1 L 1,1 L -1,1 Z",
+          scale: 6,
+          fillColor: "#a855f7",
+          fillOpacity: 0.9,
+          strokeColor: "#ffffff",
+          strokeWeight: 2,
+        },
+        label: {
+          text: "rotate / scale",
+          color: "#d8b4fe",
+          fontSize: "11px",
+          fontWeight: "600",
+          className: "splay-handle-label",
+        },
+      });
+      m.addListener("drag", (e: google.maps.MapMouseEvent) => {
+        if (!e.latLng) return;
+        const live = liveRef.current;
+        const d = live.design;
+        if (!d) return;
+        const asp = live.designAspect ?? DEFAULT_DESIGN_ASPECT;
+        const pos = e.latLng.toJSON();
+        const dist = distanceM(d.center, pos);
+        const bearing = headingDeg(d.center, pos);
+        const base = (Math.atan2(1, asp) * 180) / Math.PI;
+        const widthM = Math.max(2, (2 * dist) / Math.sqrt(1 + asp * asp));
+        const rotationDeg = ((bearing - base + 540) % 360) - 180;
+        setDesign((prev) =>
+          prev
+            ? {
+                ...prev,
+                widthM: Math.round(widthM * 10) / 10,
+                rotationDeg: Math.round(rotationDeg * 10) / 10,
+              }
+            : prev
+        );
+      });
+      handles.corner = m;
+    }
+    handles.move.setPosition(design.center);
+    handles.corner.setPosition(
+      offsetM(design.center, halfDiag, design.rotationDeg + cornerBearing)
+    );
+  }, [mapReady, design, designAdjust, designAspect]);
+
   // Google Maps needs a resize nudge when the split layout changes width.
   useEffect(() => {
     const map = mapRef.current;
@@ -599,6 +745,8 @@ export default function SplayCheckApp() {
         } else if (liveRef.current.measuring) {
           setMeasuring(false);
           clearMeasure();
+        } else if (liveRef.current.designAdjust) {
+          setDesignAdjust(false);
         } else if (
           liveRef.current.step !== "idle" &&
           liveRef.current.step !== "done"
@@ -633,6 +781,7 @@ export default function SplayCheckApp() {
     setCurrentId(null);
     setStep("mouth");
     setThreeDOpen(false);
+    setDesignAdjust(false); // park the overlay handles so clicks place points
     if (measuring) {
       setMeasuring(false);
       clearMeasure();
@@ -668,6 +817,63 @@ export default function SplayCheckApp() {
       setMeasuring(true);
       clearMeasure();
     }
+  };
+
+  // ---------------------------------------------------- design overlay
+  const loadDesignFile = (file: File) => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!file.type.startsWith("image/")) {
+      flash(
+        "Use a PNG or JPG image of the layout — export PDF / CAD sheets as an image first."
+      );
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : null;
+      if (!dataUrl) return;
+      // Start at the map centre, spanning about half the current view width.
+      let widthM = 120;
+      const bounds = map.getBounds();
+      if (bounds) {
+        const sw = bounds.getSouthWest();
+        const ne = bounds.getNorthEast();
+        const viewW = distanceM(
+          { lat: sw.lat(), lng: sw.lng() },
+          { lat: sw.lat(), lng: ne.lng() }
+        );
+        if (Number.isFinite(viewW) && viewW > 0) {
+          widthM = Math.max(10, Math.round(viewW * 0.5));
+        }
+      }
+      setDesign((prev) => ({
+        imageDataUrl: dataUrl,
+        imageName: file.name,
+        // Replacing the image keeps the existing georeferencing.
+        center: prev?.center ?? map.getCenter()?.toJSON() ?? UK_CENTER,
+        widthM: prev?.widthM ?? widthM,
+        rotationDeg: prev?.rotationDeg ?? 0,
+        opacity: prev?.opacity ?? 0.65,
+        visible: true,
+      }));
+      setDesignAdjust(true);
+      if (dataUrl.length > DESIGN_SAVE_WARN_BYTES) {
+        flash(
+          "Large plan image — it will display fine, but may be too big to keep in a saved assessment."
+        );
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const updateDesign = (patch: Partial<DesignOverlaySettings>) =>
+    setDesign((prev) => (prev ? { ...prev, ...patch } : prev));
+
+  const removeDesign = () => {
+    setDesign(null);
+    setDesignAdjust(false);
+    setDesignAspect(null);
   };
 
   const updateParams = (patch: Partial<SplayParams>) => {
@@ -740,8 +946,29 @@ export default function SplayCheckApp() {
       points,
       mapCenter: map.getCenter()?.toJSON() ?? UK_CENTER,
       mapZoom: map.getZoom() ?? 17,
+      designOverlay: design,
     };
-    await assessmentStore.save(assessment);
+    try {
+      await assessmentStore.save(assessment);
+    } catch {
+      // Most likely the localStorage quota — the design image data URL is by
+      // far the biggest item, so retry without it before giving up.
+      if (design) {
+        try {
+          await assessmentStore.save({ ...assessment, designOverlay: null });
+          setCurrentId(id);
+          await refreshSaved();
+          flash(
+            `Saved “${assessment.name}” without the design layout — the plan image is too large for browser storage.`
+          );
+          return;
+        } catch {
+          /* fall through */
+        }
+      }
+      flash("Save failed — browser storage is full.");
+      return;
+    }
     setCurrentId(id);
     await refreshSaved();
     flash(`Saved “${assessment.name}”`);
@@ -766,6 +993,9 @@ export default function SplayCheckApp() {
     setPoints(a.points);
     setSiteName(a.name);
     setCurrentId(a.id);
+    setDesign(a.designOverlay ?? null);
+    setDesignAdjust(false);
+    if (!a.designOverlay) setDesignAspect(null);
     const complete =
       a.points.mouth && a.points.origin && a.points.left && a.points.right;
     setStep(complete ? "done" : "idle");
@@ -790,6 +1020,11 @@ export default function SplayCheckApp() {
     );
     ghostMarkerRef.current?.setMap(map);
     ghostLineRef.current?.setMap(map);
+    designHandlesRef.current.move?.setMap(map);
+    designHandlesRef.current.corner?.setMap(map);
+    // The design image is redrawn onto the export canvas from coordinates,
+    // like the splay geometry, so hide the live element during capture too.
+    designOverlayRef.current?.setHidden(!visible);
   }, []);
 
   const doExport = async () => {
@@ -805,6 +1040,7 @@ export default function SplayCheckApp() {
         params,
         results,
         siteName,
+        design,
         setOverlaysVisible,
       });
     } catch (err) {
@@ -826,7 +1062,9 @@ export default function SplayCheckApp() {
     ? measureDist != null
       ? `Measured: ${measureDist.toFixed(2)} m — click to start a new measurement, Esc to exit.`
       : "Measure — click two points on the map. Esc to exit."
-    : STEP_PROMPTS[step];
+    : designAdjust && design && step !== "mouth" && step !== "origin" && step !== "left" && step !== "right"
+      ? "Align the design layout — drag the round handle to move the plan, the square corner handle to rotate & scale. Esc / toggle Adjust when the plan sits on the existing road."
+      : STEP_PROMPTS[step];
 
   return (
     <div className="relative flex h-screen w-screen overflow-hidden bg-slate-950">
@@ -846,6 +1084,12 @@ export default function SplayCheckApp() {
         measuring={measuring}
         measureDist={measureDist}
         onToggleMeasure={toggleMeasure}
+        design={design}
+        designAdjust={designAdjust}
+        onDesignFile={loadDesignFile}
+        onDesignUpdate={updateDesign}
+        onDesignAdjust={setDesignAdjust}
+        onDesignRemove={removeDesign}
         mapType={mapType}
         onMapType={setMapType}
         siteName={siteName}

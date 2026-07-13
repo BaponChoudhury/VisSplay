@@ -39,6 +39,29 @@ export interface SplayPoints {
   right: LatLng | null;
 }
 
+/**
+ * A proposed design layout (site plan / CAD sheet exported as an image)
+ * superimposed on the map so splays can be drawn and checked against the new
+ * design lines. Georeferencing is deliberately simple: geographic centre, the
+ * real-world width the image spans, and a clockwise rotation.
+ */
+export interface DesignOverlaySettings {
+  /** The plan image as a data URL (PNG/JPG uploaded by the engineer). */
+  imageDataUrl: string;
+  /** Original file name, for the panel and export summary. */
+  imageName: string;
+  /** Geographic position of the image centre. */
+  center: LatLng;
+  /** Real-world width the full image spans, metres. */
+  widthM: number;
+  /** Clockwise rotation from north-up, degrees. */
+  rotationDeg: number;
+  /** Overlay opacity, 0–1 (semi-transparent so the imagery reads through). */
+  opacity: number;
+  /** Toggle the overlay without losing its placement. */
+  visible: boolean;
+}
+
 export interface SavedAssessment {
   id: string;
   name: string;
@@ -48,4 +71,6 @@ export interface SavedAssessment {
   points: SplayPoints;
   mapCenter: LatLng;
   mapZoom: number;
+  /** Superimposed design layout, if one was placed (added later — optional). */
+  designOverlay?: DesignOverlaySettings | null;
 }

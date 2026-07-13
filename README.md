@@ -34,6 +34,30 @@ survey.
 4. Measure tool for kerb offsets; save/load assessments (browser
    localStorage); export a PNG with the splay and a parameters summary.
 
+## Design layout overlay
+
+**📐 Superimpose design layout** overlays a proposed layout plan (PNG/JPG —
+export PDF or CAD sheets as an image first) on the map so the splay can be
+drawn and checked against the **new design lines** rather than the existing
+road:
+
+1. Upload the image — it appears semi-transparent at the map centre with
+   **Adjust** mode on: drag the round handle to move the plan, the square
+   corner handle to rotate & scale, until the plan's existing-road features
+   sit on the aerial imagery.
+2. **Calibrate scale** for accuracy: measure a known length on the overlaid
+   plan (its scale bar or a dimensioned line) with the 📏 Measure tool, type
+   the true length, Apply. Opacity, rotation and width are also directly
+   editable.
+3. Turn Adjust off and draw the splay as usual — clicks pass straight through
+   the overlay, so place the junction mouth, Point A and the Y points on the
+   *proposed* kerb lines. Pass/fail then reports against the new design.
+
+The overlay is saved with the assessment (subject to browser-storage size —
+very large images are dropped from the save with a warning) and is included
+in the PNG export. Note the 3D sightline check still tests against the
+*existing* 3D tiles, so it reflects current features, not the proposed works.
+
 ## Architecture notes
 
 - `lib/standards.ts` — all standards values (SSD tables, X options, eye

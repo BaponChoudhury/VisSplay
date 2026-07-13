@@ -7,7 +7,12 @@
  */
 
 import { useState } from "react";
-import type { SavedAssessment, SplayParams, StandardId } from "@/lib/types";
+import type {
+  DesignOverlaySettings,
+  SavedAssessment,
+  SplayParams,
+  StandardId,
+} from "@/lib/types";
 import {
   DRIVER_EYE_HEIGHT_RANGE_M,
   EXPORT_DISCLAIMER,
@@ -40,6 +45,12 @@ interface Props {
   measuring: boolean;
   measureDist: number | null;
   onToggleMeasure: () => void;
+  design: DesignOverlaySettings | null;
+  designAdjust: boolean;
+  onDesignFile: (file: File) => void;
+  onDesignUpdate: (patch: Partial<DesignOverlaySettings>) => void;
+  onDesignAdjust: (v: boolean) => void;
+  onDesignRemove: () => void;
   mapType: "hybrid" | "roadmap";
   onMapType: (t: "hybrid" | "roadmap") => void;
   siteName: string;
@@ -127,6 +138,19 @@ export default function ControlPanel(props: Props) {
             </p>
           )}
         </div>
+
+        {/* Design layout overlay */}
+        <DesignOverlaySection
+          design={props.design}
+          designAdjust={props.designAdjust}
+          measuring={props.measuring}
+          measureDist={props.measureDist}
+          onToggleMeasure={props.onToggleMeasure}
+          onFile={props.onDesignFile}
+          onUpdate={props.onDesignUpdate}
+          onAdjust={props.onDesignAdjust}
+          onRemove={props.onDesignRemove}
+        />
 
         {/* Drawing */}
         <div className={sectionCls}>
@@ -560,6 +584,7 @@ export default function ControlPanel(props: Props) {
                     })}{" "}
                     · {STANDARD_LABELS[a.params.standard]} · Y{" "}
                     {a.params.yRequired.toFixed(0)} m
+                    {a.designOverlay ? " · 📐 plan" : ""}
                   </div>
                 </div>
                 <button
@@ -589,6 +614,216 @@ export default function ControlPanel(props: Props) {
           results.
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Superimpose a proposed design layout (site plan exported as PNG/JPG) on the
+ * map, align it to the existing road, then draw the splay against the new
+ * design lines. Placement = centre + real-world width + rotation + opacity.
+ */
+function DesignOverlaySection({
+  design,
+  designAdjust,
+  measuring,
+  measureDist,
+  onToggleMeasure,
+  onFile,
+  onUpdate,
+  onAdjust,
+  onRemove,
+}: {
+  design: DesignOverlaySettings | null;
+  designAdjust: boolean;
+  measuring: boolean;
+  measureDist: number | null;
+  onToggleMeasure: () => void;
+  onFile: (file: File) => void;
+  onUpdate: (patch: Partial<DesignOverlaySettings>) => void;
+  onAdjust: (v: boolean) => void;
+  onRemove: () => void;
+}) {
+  const [trueLen, setTrueLen] = useState("");
+
+  const pickFile = (label: string) => (
+    <label className={`${btnSecondary} block w-full cursor-pointer text-center`}>
+      {label}
+      <input
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) onFile(f);
+          e.target.value = ""; // allow re-selecting the same file
+        }}
+      />
+    </label>
+  );
+
+  const trueLenNum = Number(trueLen);
+  const canCalibrate =
+    design != null &&
+    measureDist != null &&
+    measureDist > 0 &&
+    Number.isFinite(trueLenNum) &&
+    trueLenNum > 0;
+
+  return (
+    <div className={sectionCls}>
+      <div className={headingCls}>Design layout overlay</div>
+      {!design ? (
+        <>
+          {pickFile("📐 Superimpose design layout…")}
+          <p className="mt-1.5 text-xs leading-4 text-slate-500">
+            Overlay a proposed layout plan (PNG / JPG — export PDF or CAD sheets
+            as an image first) on the map, align it to the existing road, then
+            draw and check the splay against the new design lines.
+          </p>
+        </>
+      ) : (
+        <>
+          <div className="flex items-center gap-2">
+            <div
+              className="min-w-0 flex-1 truncate text-sm text-slate-200"
+              title={design.imageName}
+            >
+              📐 {design.imageName}
+            </div>
+            <button
+              className="rounded px-1.5 py-1 text-xs text-slate-500 hover:bg-red-500/20 hover:text-red-400"
+              title="Remove the design overlay"
+              onClick={onRemove}
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="mt-2 flex gap-2">
+            <button
+              className={`${designAdjust ? btnPrimary : btnSecondary} flex-1`}
+              onClick={() => onAdjust(!designAdjust)}
+              title="Show drag handles on the map: round = move, square corner = rotate & scale"
+            >
+              {designAdjust ? "✓ Adjusting…" : "Adjust on map"}
+            </button>
+            <button
+              className={`${btnSecondary} flex-1`}
+              onClick={() => onUpdate({ visible: !design.visible })}
+            >
+              {design.visible ? "Hide" : "Show"}
+            </button>
+          </div>
+
+          <div className="mt-3 text-xs font-medium text-slate-400">
+            Opacity — {Math.round(design.opacity * 100)}%
+          </div>
+          <input
+            type="range"
+            min={0.1}
+            max={1}
+            step={0.05}
+            value={design.opacity}
+            onChange={(e) => onUpdate({ opacity: Number(e.target.value) })}
+            className="mt-1 w-full accent-sky-500"
+          />
+
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <div>
+              <div className="text-xs font-medium text-slate-400">
+                Rotation (°)
+              </div>
+              <input
+                type="number"
+                step={0.5}
+                className={`${inputCls} mt-1`}
+                value={design.rotationDeg}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v)) {
+                    onUpdate({ rotationDeg: ((v + 540) % 360) - 180 });
+                  }
+                }}
+              />
+            </div>
+            <div>
+              <div className="text-xs font-medium text-slate-400">
+                Image width (m)
+              </div>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                className={`${inputCls} mt-1`}
+                value={design.widthM}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v) && v >= 1) onUpdate({ widthM: v });
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Scale calibration from a known plan dimension */}
+          <div className="mt-3 rounded-md border border-slate-800 bg-slate-800/40 p-2">
+            <div className="text-xs font-medium text-slate-400">
+              Calibrate scale
+            </div>
+            <p className="mt-1 text-xs leading-4 text-slate-500">
+              Measure a known length on the overlaid plan (its scale bar or a
+              dimensioned line) with{" "}
+              <button
+                className="font-medium text-sky-400 hover:underline"
+                onClick={onToggleMeasure}
+              >
+                📏 Measure{measuring ? " (on)" : ""}
+              </button>
+              , then enter the true length:
+            </p>
+            <div className="mt-1.5 flex items-center gap-2">
+              <span className="whitespace-nowrap text-xs text-slate-400">
+                {measureDist != null
+                  ? `${measureDist.toFixed(2)} m on map =`
+                  : "measure first…"}
+              </span>
+              <input
+                type="number"
+                min={0.1}
+                step={0.1}
+                placeholder="true m"
+                className={inputCls}
+                value={trueLen}
+                onChange={(e) => setTrueLen(e.target.value)}
+                disabled={measureDist == null}
+              />
+              <button
+                className={btnSecondary}
+                disabled={!canCalibrate}
+                onClick={() => {
+                  if (!canCalibrate || !design || measureDist == null) return;
+                  const factor = trueLenNum / measureDist;
+                  onUpdate({
+                    widthM: Math.round(design.widthM * factor * 10) / 10,
+                  });
+                  setTrueLen("");
+                }}
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-2">{pickFile("Replace image (keeps placement)…")}</div>
+          <p className="mt-1.5 text-xs leading-4 text-slate-500">
+            The plan sits <span className="text-slate-300">under</span> the
+            splay overlay, and clicks pass straight through it — so draw the
+            splay on the <span className="text-slate-300">new</span> kerb lines
+            exactly as usual and the pass/fail check applies to the proposed
+            layout.
+          </p>
+        </>
+      )}
     </div>
   );
 }
