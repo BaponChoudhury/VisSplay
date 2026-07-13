@@ -86,12 +86,21 @@ type LegResult = {
 const INTRUSION_TOLERANCE_M = 0.2;
 
 /**
- * Ring of points (metres, east/north offsets) sampled around a splay vertex.
- * We take the LOWEST surface across the ring as the road level — this ducks
- * under walls, kerbs, parked cars and tree canopy that a single point at the
- * vertex would otherwise hit (there's no bare-earth in photogrammetry tiles).
+ * Ring of points (unit east/north offsets, scaled by a radius) sampled around
+ * a splay vertex. We take the LOWEST surface across the ring as the ground
+ * level — this ducks under walls, kerbs, parked cars and tree canopy that a
+ * single point at the vertex would otherwise hit (there's no bare-earth in
+ * photogrammetry tiles).
+ *
+ * The radius matters. The Y points (B/C) sit on the carriageway edge, so a
+ * wide ring is safe and helps duck parked cars. Point A is only X metres
+ * (typically 2.4 m) from the major road — and for a NEW proposed access it
+ * usually sits on grass/verge ABOVE the carriageway. A wide ring there leaks
+ * onto the lower road surface along the Y line and sinks the driver eye below
+ * the verge, so A gets a tight ring that stays on its own 2D spot.
  */
-const GROUND_RING_M = 3;
+const GROUND_RING_M = 3; // Y points (B/C): duck kerbs / parked cars
+const ORIGIN_RING_M = 1; // Point A: stay on the verge/drive at A itself
 const GROUND_RING_OFFSETS: [number, number][] = [
   [0, 0],
   [1, 0],
@@ -105,12 +114,12 @@ const GROUND_RING_OFFSETS: [number, number][] = [
 ];
 
 /** Lat/lng points on the ground ring around a point (for min-surface sampling). */
-function ringPoints(p: LatLng): LatLng[] {
+function ringPoints(p: LatLng, radiusM: number): LatLng[] {
   const mPerLat = 111320;
   const mPerLng = 111320 * Math.cos((p.lat * Math.PI) / 180);
   return GROUND_RING_OFFSETS.map(([de, dn]) => ({
-    lat: p.lat + (dn * GROUND_RING_M) / mPerLat,
-    lng: p.lng + (de * GROUND_RING_M) / mPerLng,
+    lat: p.lat + (dn * radiusM) / mPerLat,
+    lng: p.lng + (de * radiusM) / mPerLng,
   }));
 }
 
@@ -193,13 +202,14 @@ export default function Cesium3DPanel({
   );
 
   /**
-   * Road-surface height at a vertex: the LOWEST surface across a small ring, so
-   * a wall/kerb/parked car/canopy at the exact point doesn't lift the "ground".
+   * Ground height at a vertex: the LOWEST surface across a ring, so a
+   * wall/kerb/parked car/canopy at the exact point doesn't lift the "ground".
+   * Each point carries its own ring radius (tight at A, wide at B/C).
    */
   const roadHeights = useCallback(
-    async (pts: LatLng[]): Promise<(number | null)[]> => {
+    async (pts: LatLng[], radiiM: number[]): Promise<(number | null)[]> => {
       const flat: LatLng[] = [];
-      pts.forEach((p) => flat.push(...ringPoints(p)));
+      pts.forEach((p, i) => flat.push(...ringPoints(p, radiiM[i])));
       const h = await sampleHeights(flat);
       const n = GROUND_RING_OFFSETS.length;
       return pts.map((_, i) => {
@@ -218,7 +228,8 @@ export default function Cesium3DPanel({
   // the origin (driver) height is known.
   const sampleGround = useCallback(async (): Promise<boolean> => {
     const pts = [origin, left, right].filter(Boolean) as LatLng[];
-    const heights = await roadHeights(pts);
+    const radii = pts.map((p) => (p === origin ? ORIGIN_RING_M : GROUND_RING_M));
+    const heights = await roadHeights(pts, radii);
     pts.forEach((p, i) => {
       if (heights[i] != null) groundRef.current.set(key(p), heights[i] as number);
     });
@@ -272,9 +283,9 @@ export default function Cesium3DPanel({
         });
       }
 
-      // One pass: the low ring around A, the low ring around Y, then the line.
-      const aRing = ringPoints(origin);
-      const yRing = ringPoints(pt);
+      // One pass: the tight ring at A, the low ring around Y, then the line.
+      const aRing = ringPoints(origin, ORIGIN_RING_M);
+      const yRing = ringPoints(pt, GROUND_RING_M);
       const n = GROUND_RING_OFFSETS.length;
       const heights = await sampleHeights([...aRing, ...yRing, ...interior]);
 
