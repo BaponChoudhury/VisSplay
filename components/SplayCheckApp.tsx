@@ -2,8 +2,8 @@
 
 /**
  * SplayCheck main app: Google Map, splay drawing state machine, measurement
- * tool, save/load, PNG export and the 3D driver's-eye view. All standards
- * values come from lib/standards.ts — nothing is hardcoded here.
+ * tool, save/load and PNG export. All standards values come from
+ * lib/standards.ts — nothing is hardcoded here.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -28,11 +28,7 @@ import {
   createDesignOverlay,
   type DesignOverlayHandle,
 } from "@/lib/designOverlay";
-import dynamic from "next/dynamic";
 import ControlPanel from "./ControlPanel";
-
-// Cesium is a large, browser-only library — code-split and load on demand.
-const Cesium3DPanel = dynamic(() => import("./Cesium3DPanel"), { ssr: false });
 
 export type Step = "idle" | "mouth" | "origin" | "left" | "right" | "done";
 export type Mode = "manual" | "auto";
@@ -95,7 +91,6 @@ const STEP_PROMPTS: Record<Step, string | null> = {
 
 export default function SplayCheckApp() {
   const mapsState = useGoogleMaps();
-  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
 
   const mapDivRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -132,9 +127,6 @@ export default function SplayCheckApp() {
   const [exporting, setExporting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
-  // 3D driver's-eye view (Phase 3).
-  const [threeDOpen, setThreeDOpen] = useState(false);
-
   // Superimposed design layout (proposed junction plan drawn over the map).
   const [design, setDesign] = useState<DesignOverlaySettings | null>(null);
   const [designAdjust, setDesignAdjust] = useState(false);
@@ -148,7 +140,6 @@ export default function SplayCheckApp() {
     measuring,
     points,
     params,
-    threeDOpen,
     design,
     designAspect,
     designAdjust,
@@ -160,7 +151,6 @@ export default function SplayCheckApp() {
     measuring,
     points,
     params,
-    threeDOpen,
     design,
     designAspect,
     designAdjust,
@@ -716,16 +706,6 @@ export default function SplayCheckApp() {
     );
   }, [mapReady, design, designAdjust, designAspect]);
 
-  // Google Maps needs a resize nudge when the split layout changes width.
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!mapReady || !map) return;
-    const t = window.setTimeout(() => {
-      google.maps.event.trigger(map, "resize");
-    }, 210);
-    return () => window.clearTimeout(t);
-  }, [mapReady, threeDOpen]);
-
   // ------------------------------------------------------------- keyboard
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -740,9 +720,7 @@ export default function SplayCheckApp() {
         return;
 
       if (e.key === "Escape") {
-        if (liveRef.current.threeDOpen) {
-          setThreeDOpen(false);
-        } else if (liveRef.current.measuring) {
+        if (liveRef.current.measuring) {
           setMeasuring(false);
           clearMeasure();
         } else if (liveRef.current.designAdjust) {
@@ -780,7 +758,6 @@ export default function SplayCheckApp() {
     setPoints(EMPTY_POINTS);
     setCurrentId(null);
     setStep("mouth");
-    setThreeDOpen(false);
     setDesignAdjust(false); // park the overlay handles so clicks place points
     if (measuring) {
       setMeasuring(false);
@@ -793,21 +770,7 @@ export default function SplayCheckApp() {
     setPoints(EMPTY_POINTS);
     setStep("idle");
     setCurrentId(null);
-    setThreeDOpen(false);
   };
-
-  // ----------------------------------------------------- 3D driver view
-  const open3D = () => {
-    const p = liveRef.current.points;
-    if (!p.origin || !(p.left || p.right)) return;
-    if (measuring) {
-      setMeasuring(false);
-      clearMeasure();
-    }
-    setThreeDOpen(true);
-  };
-
-  const close3D = () => setThreeDOpen(false);
 
   const toggleMeasure = () => {
     if (measuring) {
@@ -979,7 +942,6 @@ export default function SplayCheckApp() {
     const map = mapRef.current;
     if (!a || !map) return;
     clearGhost();
-    setThreeDOpen(false);
     if (measuring) {
       setMeasuring(false);
       clearMeasure();
@@ -1101,17 +1063,13 @@ export default function SplayCheckApp() {
         }
         exporting={exporting}
         onExport={() => void doExport()}
-        canInspect={!!(points.origin && (points.left || points.right))}
-        threeDOpen={threeDOpen}
-        onInspect3D={open3D}
         saved={saved}
         currentId={currentId}
         onLoad={(id) => void loadAssessment(id)}
         onDelete={(id) => void deleteAssessment(id)}
       />
 
-      <div className="flex min-w-0 flex-1">
-        <div className="relative min-w-0 flex-1">
+      <div className="relative min-w-0 flex-1">
         <div ref={mapDivRef} className="h-full w-full" />
 
         {mapsState.status === "loading" && (
@@ -1142,25 +1100,6 @@ export default function SplayCheckApp() {
             {notice}
           </div>
         )}
-        </div>
-
-        {threeDOpen &&
-          points.origin &&
-          (points.left || points.right) &&
-          apiKey && (
-            <div className="min-w-0 flex-1 border-l border-slate-700">
-              <Cesium3DPanel
-                apiKey={apiKey}
-                origin={points.origin}
-                left={points.left}
-                right={points.right}
-                eyeHeight={params.eyeHeight}
-                objectHeight={params.objectHeight}
-                requiredY={params.yRequired}
-                onClose={close3D}
-              />
-            </div>
-          )}
       </div>
     </div>
   );
@@ -1193,7 +1132,6 @@ function MissingKeyScreen() {
         <ul className="mt-2 list-disc pl-5 text-sm leading-6 text-slate-300">
           <li>Maps JavaScript API</li>
           <li>Places API (New) — for the address search box</li>
-          <li>Map Tiles API — later, for Phase 3 (3D tiles)</li>
         </ul>
         <p className="mt-4 text-xs text-slate-500">
           Restart the dev server after creating .env.local.

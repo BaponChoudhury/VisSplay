@@ -28,8 +28,5 @@ next-env.d.ts
 # editor / tooling
 .claude/
 
-# generated Cesium runtime assets (recreated by scripts/copy-cesium.mjs on postinstall)
-/public/cesium
-
 # local dev server log
 dev.log

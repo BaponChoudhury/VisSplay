@@ -16,7 +16,6 @@ survey.
 3. In Google Cloud Console, enable on the key's project:
    - **Maps JavaScript API** (map, drawing, geometry, Street View)
    - **Places API (New)** (address/postcode search)
-   - **Map Tiles API** (Phase 3 — 3D driver's-eye view / photorealistic tiles)
 4. `npm run dev` → http://localhost:3000
 
 ## Using the tool (Phase 1)
@@ -55,8 +54,7 @@ road:
 
 The overlay is saved with the assessment (subject to browser-storage size —
 very large images are dropped from the save with a warning) and is included
-in the PNG export. Note the 3D sightline check still tests against the
-*existing* 3D tiles, so it reflects current features, not the proposed works.
+in the PNG export.
 
 ## Architecture notes
 
@@ -69,31 +67,13 @@ in the PNG export. Note the 3D sightline check still tests against the
 - `lib/export.ts` — PNG export (html2canvas capture + vector redraw +
   parameters block).
 
-## 3D sightline check
-
-**🔎 3D sightline check** (Tools) opens a CesiumJS panel using Google
-Photorealistic 3D Tiles and runs an **automated line-of-sight test** on each
-splay leg. It samples the 3D-tile surface at ~1 m steps along A→B and A→C and
-checks whether anything (ground, hedge, fence, building) rises above the
-straight line from the driver eye (`ground + eye height`) to the object at Y
-(`ground + object height`). Each side is reported **CLEAR** or **OBSTRUCTED**,
-and when obstructed it gives the distance from Point A and how far the surface
-rises above the line. The sightlines are drawn over an orbit view (green =
-clear, red = obstructed) with a marker at the worst obstruction; a **Driver
-eye** preset is also available.
-
-Because the tiles are aerial photogrammetry, the *picture* is smeared at eye
-level and includes trees/parked cars, so treat the result as a desktop
-indicator and verify on site. Eye height and object height come from the
-**Sightline heights** control.
-
-> Requires the **Map Tiles API** enabled on the Google key. Cesium's runtime
-> assets are copied to `public/cesium` automatically on `npm install`
-> (`npm run copy-cesium` to redo it).
-
 ## Roadmap
 
 - **Phase 1** — 2D map splay tool ✅
-- **3D automated sightline check** (CesiumJS + Google 3D Tiles) ✅
+- **Design layout overlay** — check splays against proposed layouts ✅
 - **Future** — line-of-sight testing against Environment Agency LiDAR DSM
   (bare-earth + surface, less noisy than photogrammetry)
+
+> An automated 3D sightline check against Google Photorealistic 3D Tiles was
+> removed: aerial photogrammetry is too noisy at driver eye level to give a
+> trustworthy CLEAR / OBSTRUCTED verdict.
