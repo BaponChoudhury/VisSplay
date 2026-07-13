@@ -76,11 +76,11 @@ Photorealistic 3D Tiles and runs an **automated line-of-sight test** on each
 splay leg. It samples the 3D-tile surface at ~1 m steps along A→B and A→C and
 checks whether anything (ground, hedge, fence, building) rises above the
 straight line from the driver eye (`ground + eye height`) to the object at Y
-(`ground + object height`). Each side is reported **CLEAR** or **OBSTRUCTED**,
-and when obstructed it gives the distance from Point A and how far the surface
-rises above the line. The sightlines are drawn over an orbit view (green =
-clear, red = obstructed) with a marker at the worst obstruction; a **Driver
-eye** preset is also available.
+(`ground + object height`). The sightlines are drawn over an orbit view
+(green = clear, red = obstructed) with a ⚠ marker at the worst obstruction;
+driver's-seat views (left / ahead / right) are also available. There is
+deliberately no textual CLEAR/OBSTRUCTED verdict box — the photogrammetry is
+too noisy for that to be trusted, so read the coloured scene and judge.
 
 Because the tiles are aerial photogrammetry, the *picture* is smeared at eye
 level and includes trees/parked cars, so treat the result as a desktop

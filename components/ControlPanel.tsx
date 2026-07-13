@@ -507,11 +507,12 @@ export default function ControlPanel(props: Props) {
           {props.canInspect && (
             <p className="mt-1.5 text-xs leading-4 text-slate-500">
               Samples the Google 3D-tile surface along both legs (eye height →
-              object height) and reports <span className="text-green-400">CLEAR</span>{" "}
-              / <span className="text-red-400">OBSTRUCTED</span> per side, with a
-              coloured overview. Also view from the driver’s seat — left / ahead
-              / right. A desktop indicator — verify on site. Needs the Map Tiles
-              API.
+              object height) and colours each sightline{" "}
+              <span className="text-green-400">green</span> (clear) /{" "}
+              <span className="text-red-400">red</span> (obstructed), marking
+              the worst obstruction. Also view from the driver’s seat — left /
+              ahead / right. A desktop indicator — the tiles include trees and
+              parked cars, so verify on site. Needs the Map Tiles API.
             </p>
           )}
         </div>

@@ -146,7 +146,6 @@ export default function Cesium3DPanel({
   );
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<ViewMode>("orbit");
-  const [checking, setChecking] = useState(false);
   const [checkLeft, setCheckLeft] = useState<LegResult>(null);
   const [checkRight, setCheckRight] = useState<LegResult>(null);
 
@@ -347,12 +346,10 @@ export default function Cesium3DPanel({
   );
 
   const runSightlineCheck = useCallback(async () => {
-    setChecking(true);
     const l = left ? await checkLeg(left) : null;
     const r = right ? await checkLeg(right) : null;
     setCheckLeft(l);
     setCheckRight(r);
-    setChecking(false);
   }, [left, right, checkLeg]);
 
   // ---- draw both sightlines + envelopes and place the camera --------------
@@ -764,25 +761,6 @@ export default function Cesium3DPanel({
         </button>
       </div>
 
-      {/* Verdict panel */}
-      {status === "ready" && (
-        <div className="pointer-events-none absolute left-2.5 top-16 w-60 rounded-lg border border-slate-600 bg-slate-900/90 p-3 text-xs shadow-xl">
-          <div className="mb-1.5 flex items-center justify-between">
-            <span className="font-semibold uppercase tracking-wider text-slate-400">
-              Sightline check
-            </span>
-            {checking && <span className="text-slate-500">checking…</span>}
-          </div>
-          <VerdictRow label="Left (A–B)" res={checkLeft} present={!!left} />
-          <VerdictRow label="Right (A–C)" res={checkRight} present={!!right} />
-          <p className="mt-2 leading-4 text-slate-500">
-            Eye {eyeHeight.toFixed(2)} m → object {objectHeight.toFixed(2)} m.
-            Tests the 3D-tile surface along each leg. Verify on site — tiles
-            include trees/parked cars and can be noisy.
-          </p>
-        </div>
-      )}
-
       {status === "loading" && (
         <div className="pointer-events-none absolute inset-x-0 top-1/2 flex -translate-y-1/2 justify-center">
           <div className="rounded-md bg-slate-950/80 px-4 py-2 text-center text-sm text-slate-300">
@@ -835,40 +813,3 @@ function ViewBtn({
   );
 }
 
-function VerdictRow({
-  label,
-  res,
-  present,
-}: {
-  label: string;
-  res: LegResult;
-  present: boolean;
-}) {
-  if (!present) return null;
-  let badge: { text: string; cls: string };
-  let detail: string | null = null;
-  if (res == null) {
-    badge = { text: "…", cls: "bg-slate-700 text-slate-300" };
-  } else if (res.incomplete) {
-    badge = { text: "NO DATA", cls: "bg-slate-600 text-slate-200" };
-    detail = "tiles not fully loaded here";
-  } else if (res.clear) {
-    badge = { text: "CLEAR", cls: "bg-green-500/25 text-green-300" };
-  } else {
-    badge = { text: "OBSTRUCTED", cls: "bg-red-500/25 text-red-300" };
-    detail = `rises ${res.worstIntrusionM.toFixed(1)} m above the line at ${res.worstDistM.toFixed(0)} m`;
-  }
-  return (
-    <div className="mb-1.5">
-      <div className="flex items-center justify-between">
-        <span className="text-slate-300">{label}</span>
-        <span
-          className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${badge.cls}`}
-        >
-          {badge.text}
-        </span>
-      </div>
-      {detail && <div className="mt-0.5 text-[10px] text-slate-500">{detail}</div>}
-    </div>
-  );
-}
