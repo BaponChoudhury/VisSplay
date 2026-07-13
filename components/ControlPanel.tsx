@@ -60,6 +60,9 @@ interface Props {
   canExport: boolean;
   exporting: boolean;
   onExport: () => void;
+  canInspect: boolean;
+  threeDOpen: boolean;
+  onInspect3D: () => void;
   saved: SavedAssessment[];
   currentId: string | null;
   onLoad: (id: string) => void;
@@ -456,8 +459,8 @@ export default function ControlPanel(props: Props) {
             An obstruction matters if it intrudes into the splay between the
             object height ({params.objectHeight.toFixed(2)} m) and{" "}
             {OBJECT_HEIGHT_MAX_M.toFixed(1)} m above the carriageway, seen from
-            the driver eye height ({params.eyeHeight.toFixed(2)} m). These are
-            recorded in the export summary.
+            the driver eye height ({params.eyeHeight.toFixed(2)} m). These drive
+            the 3D driver's-eye view and the export summary.
           </p>
         </div>
 
@@ -485,6 +488,30 @@ export default function ControlPanel(props: Props) {
               {props.measureDist != null
                 ? `Distance: ${props.measureDist.toFixed(2)} m`
                 : "Click two points on the map."}
+            </p>
+          )}
+          <button
+            className={`${
+              props.threeDOpen ? btnPrimary : btnSecondary
+            } mt-2 w-full`}
+            disabled={!props.canInspect}
+            onClick={props.onInspect3D}
+            title={
+              props.canInspect
+                ? "Automated line-of-sight test against Google 3D tiles, both legs"
+                : "Draw a splay (origin + at least one Y point) first"
+            }
+          >
+            🔎 3D sightline check
+          </button>
+          {props.canInspect && (
+            <p className="mt-1.5 text-xs leading-4 text-slate-500">
+              Samples the Google 3D-tile surface along both legs (eye height →
+              object height) and reports <span className="text-green-400">CLEAR</span>{" "}
+              / <span className="text-red-400">OBSTRUCTED</span> per side, with a
+              coloured overview. Also view from the driver’s seat — left / ahead
+              / right. A desktop indicator — verify on site. Needs the Map Tiles
+              API.
             </p>
           )}
         </div>

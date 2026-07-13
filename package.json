@@ -2,14 +2,17 @@
   "name": "splaycheck",
   "version": "0.1.0",
   "private": true,
-  "description": "SplayCheck \u2014 visibility splay assessment tool for UK highway engineers (MfS / DMRB CD 109)",
+  "description": "SplayCheck — visibility splay assessment tool for UK highway engineers (MfS / DMRB CD 109)",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "copy-cesium": "node scripts/copy-cesium.mjs",
+    "postinstall": "node scripts/copy-cesium.mjs"
   },
   "dependencies": {
     "@googlemaps/js-api-loader": "^1.16.8",
+    "cesium": "^1.143.0",
     "html2canvas": "^1.4.1",
     "next": "^14.2.15",
     "react": "^18.3.1",
