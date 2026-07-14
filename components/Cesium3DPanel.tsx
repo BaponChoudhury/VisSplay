@@ -267,23 +267,37 @@ export default function Cesium3DPanel({
       const viewer = viewerRef.current;
       if (!Cesium || !viewer) return null;
 
-      const totalM = Cesium.Cartesian3.distance(
-        Cesium.Cartesian3.fromDegrees(origin.lng, origin.lat, 0),
-        Cesium.Cartesian3.fromDegrees(pt.lng, pt.lat, 0)
-      );
+      const mPerLat = 111320;
+      const mPerLng = 111320 * Math.cos((origin.lat * Math.PI) / 180);
+      const dE = (pt.lng - origin.lng) * mPerLng;
+      const dN = (pt.lat - origin.lat) * mPerLat;
+      const totalM = Math.hypot(dE, dN);
+      // Unit vector perpendicular to the sightline (for the sampling corridor).
+      const perpE = totalM > 0 ? -dN / totalM : 0;
+      const perpN = totalM > 0 ? dE / totalM : 0;
+
       const steps = Math.min(100, Math.max(12, Math.round(totalM)));
       const fracs: number[] = [];
+      // For each step, sample a narrow ±1 m corridor across the sightline and
+      // take the LOWEST surface. A building edge or tile blob just beside the
+      // line then no longer counts — only something blocking the whole corridor
+      // (a wall/hedge/bank spanning the sightline) does.
+      const CORRIDOR_M = [0, 1, -1];
       const interior: LatLng[] = [];
       for (let i = 1; i < steps; i++) {
         const f = i / steps;
         fracs.push(f);
-        interior.push({
-          lat: origin.lat + (pt.lat - origin.lat) * f,
-          lng: origin.lng + (pt.lng - origin.lng) * f,
-        });
+        const baseLat = origin.lat + (pt.lat - origin.lat) * f;
+        const baseLng = origin.lng + (pt.lng - origin.lng) * f;
+        for (const o of CORRIDOR_M) {
+          interior.push({
+            lat: baseLat + (o * perpN) / mPerLat,
+            lng: baseLng + (o * perpE) / mPerLng,
+          });
+        }
       }
 
-      // One pass: the tight ring at A, the low ring around Y, then the line.
+      // One pass: tight ring at A, low ring around Y, then the corridor.
       const aRing = ringPoints(origin, ORIGIN_RING_M);
       const yRing = ringPoints(pt, GROUND_RING_M);
       const n = GROUND_RING_OFFSETS.length;
@@ -304,7 +318,12 @@ export default function Cesium3DPanel({
 
       const eyeAbs = gA + eyeHeight;
       const targetAbs = gY + objectHeight;
-      const lineVals = heights.slice(2 * n); // one per interior fraction
+      // Lowest surface in the corridor at each step (one value per fraction).
+      const cw = CORRIDOR_M.length;
+      const corridor = heights.slice(2 * n);
+      const lineVals = fracs.map((_, j) =>
+        minOf(corridor.slice(j * cw, j * cw + cw))
+      );
 
       // Only count a SUSTAINED intrusion (a real hedge/wall/bank), ignoring
       // isolated single-sample spikes from mesh noise, signs, poles or a lone
@@ -364,7 +383,7 @@ export default function Cesium3DPanel({
   }, [left, right, checkLeg]);
 
   // ---- draw both sightlines + envelopes and place the camera --------------
-  const redraw = useCallback(() => {
+  const redraw = useCallback((moveCamera = true) => {
     const Cesium = cesiumRef.current;
     const viewer = viewerRef.current;
     if (!Cesium || !viewer) return;
@@ -508,7 +527,7 @@ export default function Cesium3DPanel({
       },
     });
 
-    placeCamera(Cesium, viewer, eye, gA);
+    if (moveCamera) placeCamera(Cesium, viewer, eye, gA);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     origin,
@@ -712,6 +731,13 @@ export default function Cesium3DPanel({
     if (status === "ready") redraw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, requiredY]);
+
+  // When a verdict arrives, re-colour the sightlines (green/red) to match —
+  // without moving the camera.
+  useEffect(() => {
+    if (status === "ready") redraw(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkLeft, checkRight]);
 
   const hasBoth = !!(left && right);
 
