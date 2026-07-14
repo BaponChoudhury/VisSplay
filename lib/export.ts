@@ -8,12 +8,18 @@
  */
 
 import html2canvas from "html2canvas";
-import type { LatLng, SplayParams, SplayPoints } from "./types";
+import type {
+  DesignOverlaySettings,
+  LatLng,
+  SplayParams,
+  SplayPoints,
+} from "./types";
 import {
   EXPORT_DISCLAIMER,
   STANDARD_LABELS,
   kphToMph,
 } from "./standards";
+import { offsetM } from "./geo";
 
 export interface ExportResults {
   yLeft: number | null;
@@ -71,6 +77,15 @@ function drawVertex(
   ctx.fillText(label, p.x + 12, p.y - 5);
 }
 
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Design overlay image failed to load"));
+    img.src = src;
+  });
+}
+
 export async function exportSplayPng(opts: {
   mapDiv: HTMLElement;
   map: google.maps.Map;
@@ -78,11 +93,21 @@ export async function exportSplayPng(opts: {
   params: SplayParams;
   results: ExportResults;
   siteName: string;
+  /** Superimposed design layout to redraw under the splay, if placed. */
+  design?: DesignOverlaySettings | null;
   /** Hide live overlays before capture, restore after. */
   setOverlaysVisible: (visible: boolean) => void;
 }): Promise<void> {
-  const { mapDiv, map, points, params, results, siteName, setOverlaysVisible } =
-    opts;
+  const {
+    mapDiv,
+    map,
+    points,
+    params,
+    results,
+    siteName,
+    design,
+    setOverlaysVisible,
+  } = opts;
 
   setOverlaysVisible(false);
   let capture: HTMLCanvasElement;
@@ -101,7 +126,7 @@ export async function exportSplayPng(opts: {
 
   const mapW = capture.width;
   const mapH = capture.height;
-  const blockH = 232;
+  const blockH = 232 + (design ? 20 : 0); // extra summary row for the overlay
 
   const out = document.createElement("canvas");
   out.width = mapW;
@@ -110,6 +135,30 @@ export async function exportSplayPng(opts: {
   if (!ctx) throw new Error("Canvas 2D context unavailable");
 
   ctx.drawImage(capture, 0, 0);
+
+  // ---- Redraw the design layout overlay ------------------------------------
+  // Same coordinate maths as the live overlay: centre pixel, pixel width from
+  // the projected west/east edge midpoints, rotation applied on the canvas.
+  if (design?.visible) {
+    try {
+      const img = await loadImage(design.imageDataUrl);
+      const c = toContainerPixel(map, design.center);
+      const wPt = toContainerPixel(map, offsetM(design.center, design.widthM / 2, 270));
+      const ePt = toContainerPixel(map, offsetM(design.center, design.widthM / 2, 90));
+      if (c && wPt && ePt && img.naturalWidth > 0) {
+        const pxW = Math.hypot(ePt.x - wPt.x, ePt.y - wPt.y);
+        const pxH = pxW * (img.naturalHeight / img.naturalWidth);
+        ctx.save();
+        ctx.translate(c.x, c.y);
+        ctx.rotate((design.rotationDeg * Math.PI) / 180);
+        ctx.globalAlpha = design.opacity;
+        ctx.drawImage(img, -pxW / 2, -pxH / 2, pxW, pxH);
+        ctx.restore();
+      }
+    } catch (err) {
+      console.error("SplayCheck export: design overlay redraw failed:", err);
+    }
+  }
 
   // ---- Redraw the splay geometry ------------------------------------------
   const { mouth, origin, left, right } = points;
@@ -173,6 +222,14 @@ export async function exportSplayPng(opts: {
 
   const rows: [string, string][] = [
     ["Site", siteName || "Unnamed site"],
+    ...(design
+      ? ([
+          [
+            "Design layout",
+            `${design.imageName}${design.visible ? "" : " (hidden)"} · width ${design.widthM.toFixed(1)} m · rotation ${design.rotationDeg.toFixed(1)}°`,
+          ],
+        ] as [string, string][])
+      : []),
     [
       "Standard / speed",
       `${STANDARD_LABELS[params.standard]} · ${params.speedKph.toFixed(0)} kph (${speedMph.toFixed(0)} mph)${params.yOverridden ? " · Y overridden" : ""}`,

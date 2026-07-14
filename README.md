@@ -34,6 +34,30 @@ survey.
 4. Measure tool for kerb offsets; save/load assessments (browser
    localStorage); export a PNG with the splay and a parameters summary.
 
+## Design layout overlay
+
+**📐 Superimpose design layout** overlays a proposed layout plan (PNG/JPG —
+export PDF or CAD sheets as an image first) on the map so the splay can be
+drawn and checked against the **new design lines** rather than the existing
+road:
+
+1. Upload the image — it appears semi-transparent at the map centre with
+   **Adjust** mode on: drag the round handle to move the plan, the square
+   corner handle to rotate & scale, until the plan's existing-road features
+   sit on the aerial imagery.
+2. **Calibrate scale** for accuracy: measure a known length on the overlaid
+   plan (its scale bar or a dimensioned line) with the 📏 Measure tool, type
+   the true length, Apply. Opacity, rotation and width are also directly
+   editable.
+3. Turn Adjust off and draw the splay as usual — clicks pass straight through
+   the overlay, so place the junction mouth, Point A and the Y points on the
+   *proposed* kerb lines. Pass/fail then reports against the new design.
+
+The overlay is saved with the assessment (subject to browser-storage size —
+very large images are dropped from the save with a warning) and is included
+in the PNG export. Note the 3D sightline check still tests against the
+*existing* 3D tiles, so it reflects current features, not the proposed works.
+
 ## Architecture notes
 
 - `lib/standards.ts` — all standards values (SSD tables, X options, eye
@@ -52,11 +76,11 @@ Photorealistic 3D Tiles and runs an **automated line-of-sight test** on each
 splay leg. It samples the 3D-tile surface at ~1 m steps along A→B and A→C and
 checks whether anything (ground, hedge, fence, building) rises above the
 straight line from the driver eye (`ground + eye height`) to the object at Y
-(`ground + object height`). Each side is reported **CLEAR** or **OBSTRUCTED**,
-and when obstructed it gives the distance from Point A and how far the surface
-rises above the line. The sightlines are drawn over an orbit view (green =
-clear, red = obstructed) with a marker at the worst obstruction; a **Driver
-eye** preset is also available.
+(`ground + object height`). The sightlines are drawn over an orbit view
+(green = clear, red = obstructed) with a ⚠ marker at the worst obstruction;
+driver's-seat views (left / ahead / right) are also available. There is
+deliberately no textual CLEAR/OBSTRUCTED verdict box — the photogrammetry is
+too noisy for that to be trusted, so read the coloured scene and judge.
 
 Because the tiles are aerial photogrammetry, the *picture* is smeared at eye
 level and includes trees/parked cars, so treat the result as a desktop

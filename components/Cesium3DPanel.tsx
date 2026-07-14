@@ -86,12 +86,21 @@ type LegResult = {
 const INTRUSION_TOLERANCE_M = 0.2;
 
 /**
- * Ring of points (metres, east/north offsets) sampled around a splay vertex.
- * We take the LOWEST surface across the ring as the road level — this ducks
- * under walls, kerbs, parked cars and tree canopy that a single point at the
- * vertex would otherwise hit (there's no bare-earth in photogrammetry tiles).
+ * Ring of points (unit east/north offsets, scaled by a radius) sampled around
+ * a splay vertex. We take the LOWEST surface across the ring as the ground
+ * level — this ducks under walls, kerbs, parked cars and tree canopy that a
+ * single point at the vertex would otherwise hit (there's no bare-earth in
+ * photogrammetry tiles).
+ *
+ * The radius matters. The Y points (B/C) sit on the carriageway edge, so a
+ * wide ring is safe and helps duck parked cars. Point A is only X metres
+ * (typically 2.4 m) from the major road — and for a NEW proposed access it
+ * usually sits on grass/verge ABOVE the carriageway. A wide ring there leaks
+ * onto the lower road surface along the Y line and sinks the driver eye below
+ * the verge, so A gets a tight ring that stays on its own 2D spot.
  */
-const GROUND_RING_M = 3;
+const GROUND_RING_M = 3; // Y points (B/C): duck kerbs / parked cars
+const ORIGIN_RING_M = 1; // Point A: stay on the verge/drive at A itself
 const GROUND_RING_OFFSETS: [number, number][] = [
   [0, 0],
   [1, 0],
@@ -105,12 +114,12 @@ const GROUND_RING_OFFSETS: [number, number][] = [
 ];
 
 /** Lat/lng points on the ground ring around a point (for min-surface sampling). */
-function ringPoints(p: LatLng): LatLng[] {
+function ringPoints(p: LatLng, radiusM: number): LatLng[] {
   const mPerLat = 111320;
   const mPerLng = 111320 * Math.cos((p.lat * Math.PI) / 180);
   return GROUND_RING_OFFSETS.map(([de, dn]) => ({
-    lat: p.lat + (dn * GROUND_RING_M) / mPerLat,
-    lng: p.lng + (de * GROUND_RING_M) / mPerLng,
+    lat: p.lat + (dn * radiusM) / mPerLat,
+    lng: p.lng + (de * radiusM) / mPerLng,
   }));
 }
 
@@ -146,7 +155,6 @@ export default function Cesium3DPanel({
   );
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<ViewMode>("orbit");
-  const [checking, setChecking] = useState(false);
   const [checkLeft, setCheckLeft] = useState<LegResult>(null);
   const [checkRight, setCheckRight] = useState<LegResult>(null);
 
@@ -194,13 +202,14 @@ export default function Cesium3DPanel({
   );
 
   /**
-   * Road-surface height at a vertex: the LOWEST surface across a small ring, so
-   * a wall/kerb/parked car/canopy at the exact point doesn't lift the "ground".
+   * Ground height at a vertex: the LOWEST surface across a ring, so a
+   * wall/kerb/parked car/canopy at the exact point doesn't lift the "ground".
+   * Each point carries its own ring radius (tight at A, wide at B/C).
    */
   const roadHeights = useCallback(
-    async (pts: LatLng[]): Promise<(number | null)[]> => {
+    async (pts: LatLng[], radiiM: number[]): Promise<(number | null)[]> => {
       const flat: LatLng[] = [];
-      pts.forEach((p) => flat.push(...ringPoints(p)));
+      pts.forEach((p, i) => flat.push(...ringPoints(p, radiiM[i])));
       const h = await sampleHeights(flat);
       const n = GROUND_RING_OFFSETS.length;
       return pts.map((_, i) => {
@@ -219,7 +228,8 @@ export default function Cesium3DPanel({
   // the origin (driver) height is known.
   const sampleGround = useCallback(async (): Promise<boolean> => {
     const pts = [origin, left, right].filter(Boolean) as LatLng[];
-    const heights = await roadHeights(pts);
+    const radii = pts.map((p) => (p === origin ? ORIGIN_RING_M : GROUND_RING_M));
+    const heights = await roadHeights(pts, radii);
     pts.forEach((p, i) => {
       if (heights[i] != null) groundRef.current.set(key(p), heights[i] as number);
     });
@@ -287,9 +297,9 @@ export default function Cesium3DPanel({
         }
       }
 
-      // One pass: low ring around A, low ring around Y, then the corridor.
-      const aRing = ringPoints(origin);
-      const yRing = ringPoints(pt);
+      // One pass: tight ring at A, low ring around Y, then the corridor.
+      const aRing = ringPoints(origin, ORIGIN_RING_M);
+      const yRing = ringPoints(pt, GROUND_RING_M);
       const n = GROUND_RING_OFFSETS.length;
       const heights = await sampleHeights([...aRing, ...yRing, ...interior]);
 
@@ -366,12 +376,10 @@ export default function Cesium3DPanel({
   );
 
   const runSightlineCheck = useCallback(async () => {
-    setChecking(true);
     const l = left ? await checkLeg(left) : null;
     const r = right ? await checkLeg(right) : null;
     setCheckLeft(l);
     setCheckRight(r);
-    setChecking(false);
   }, [left, right, checkLeg]);
 
   // ---- draw both sightlines + envelopes and place the camera --------------
@@ -790,25 +798,6 @@ export default function Cesium3DPanel({
         </button>
       </div>
 
-      {/* Verdict panel */}
-      {status === "ready" && (
-        <div className="pointer-events-none absolute left-2.5 top-16 w-60 rounded-lg border border-slate-600 bg-slate-900/90 p-3 text-xs shadow-xl">
-          <div className="mb-1.5 flex items-center justify-between">
-            <span className="font-semibold uppercase tracking-wider text-slate-400">
-              Sightline check
-            </span>
-            {checking && <span className="text-slate-500">checking…</span>}
-          </div>
-          <VerdictRow label="Left (A–B)" res={checkLeft} present={!!left} />
-          <VerdictRow label="Right (A–C)" res={checkRight} present={!!right} />
-          <p className="mt-2 leading-4 text-slate-500">
-            Eye {eyeHeight.toFixed(2)} m → object {objectHeight.toFixed(2)} m.
-            Tests the 3D-tile surface along each leg. Verify on site — tiles
-            include trees/parked cars and can be noisy.
-          </p>
-        </div>
-      )}
-
       {status === "loading" && (
         <div className="pointer-events-none absolute inset-x-0 top-1/2 flex -translate-y-1/2 justify-center">
           <div className="rounded-md bg-slate-950/80 px-4 py-2 text-center text-sm text-slate-300">
@@ -861,40 +850,3 @@ function ViewBtn({
   );
 }
 
-function VerdictRow({
-  label,
-  res,
-  present,
-}: {
-  label: string;
-  res: LegResult;
-  present: boolean;
-}) {
-  if (!present) return null;
-  let badge: { text: string; cls: string };
-  let detail: string | null = null;
-  if (res == null) {
-    badge = { text: "…", cls: "bg-slate-700 text-slate-300" };
-  } else if (res.incomplete) {
-    badge = { text: "NO DATA", cls: "bg-slate-600 text-slate-200" };
-    detail = "tiles not fully loaded here";
-  } else if (res.clear) {
-    badge = { text: "CLEAR", cls: "bg-green-500/25 text-green-300" };
-  } else {
-    badge = { text: "OBSTRUCTED", cls: "bg-red-500/25 text-red-300" };
-    detail = `rises ${res.worstIntrusionM.toFixed(1)} m above the line at ${res.worstDistM.toFixed(0)} m`;
-  }
-  return (
-    <div className="mb-1.5">
-      <div className="flex items-center justify-between">
-        <span className="text-slate-300">{label}</span>
-        <span
-          className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${badge.cls}`}
-        >
-          {badge.text}
-        </span>
-      </div>
-      {detail && <div className="mt-0.5 text-[10px] text-slate-500">{detail}</div>}
-    </div>
-  );
-}
