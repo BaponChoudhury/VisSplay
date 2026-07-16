@@ -1194,7 +1194,7 @@ export default function SplayCheckApp() {
             <p className="text-sm leading-5 text-slate-200">
               ⚠ This tool is for preliminary analysis and is not an alternative
               to site visits.{" "}
-              <span className="whitespace-nowrap text-slate-400">
+              <span className="whitespace-nowrap font-semibold text-amber-300">
                 — Bilal Choudhury
               </span>
             </p>

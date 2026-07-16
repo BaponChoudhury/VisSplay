@@ -608,6 +608,11 @@ export default function ControlPanel(props: Props) {
 
         {/* Footer */}
         <div className="px-4 py-3.5 text-[11px] leading-5 text-slate-600">
+          <p className="mb-2 italic text-amber-400/90">
+            This tool is for preliminary analysis and is not an alternative to
+            site visits. —{" "}
+            <span className="font-semibold not-italic">Bilal Choudhury</span>
+          </p>
           Obstruction envelope {params.objectHeight.toFixed(2)}–
           {OBJECT_HEIGHT_MAX_M.toFixed(1)} m above carriageway, eye height{" "}
           {params.eyeHeight.toFixed(2)} m. Standards values are provisional —
