@@ -160,3 +160,7 @@ export const STANDARD_LABELS: Record<StandardId, string> = {
 
 export const EXPORT_DISCLAIMER =
   "Desktop feasibility check only — not a substitute for a measured topographical survey and speed survey.";
+
+/** Personal disclaimer shown in the panel footer and on the PNG export. */
+export const TOOL_DISCLAIMER =
+  "This tool is for preliminary analysis and is not an alternative to site visits. — Bilal Choudhury";

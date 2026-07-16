@@ -17,6 +17,7 @@ import type {
 import {
   EXPORT_DISCLAIMER,
   STANDARD_LABELS,
+  TOOL_DISCLAIMER,
   kphToMph,
 } from "./standards";
 import { offsetM } from "./geo";
@@ -126,7 +127,9 @@ export async function exportSplayPng(opts: {
 
   const mapW = capture.width;
   const mapH = capture.height;
-  const blockH = 232 + (design ? 20 : 0); // extra summary row for the overlay
+  // 232 base + a summary row when a design overlay is placed + the personal
+  // disclaimer line.
+  const blockH = 232 + (design ? 20 : 0) + 17;
 
   const out = document.createElement("canvas");
   out.width = mapW;
@@ -269,6 +272,8 @@ export async function exportSplayPng(opts: {
   ctx.font = "italic 12px system-ui, sans-serif";
   ctx.fillStyle = "#fbbf24"; // amber-400
   ctx.fillText(EXPORT_DISCLAIMER, pad, y);
+  y += 17;
+  ctx.fillText(TOOL_DISCLAIMER, pad, y);
 
   // ---- Download ------------------------------------------------------------
   const blob = await new Promise<Blob | null>((resolve) =>

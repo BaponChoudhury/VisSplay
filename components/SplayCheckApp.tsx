@@ -74,6 +74,9 @@ const DEFAULT_DESIGN_ASPECT = 0.7;
 /** Data URLs beyond this may blow the localStorage quota when saving. */
 const DESIGN_SAVE_WARN_BYTES = 3_000_000;
 
+/** Set once the disclaimer banner has been acknowledged (cookie-consent style). */
+const DISCLAIMER_ACK_KEY = "splaycheck.disclaimer.v1";
+
 const VERTEX_COLORS: Record<VertexKey, string> = {
   mouth: "#e2e8f0", // slate-200
   origin: "#f59e0b", // amber-500
@@ -131,6 +134,27 @@ export default function SplayCheckApp() {
   const [panelOpen, setPanelOpen] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [showDisclaimer, setShowDisclaimer] = useState(false);
+
+  // Cookie-consent-style disclaimer: show until acknowledged once.
+  useEffect(() => {
+    try {
+      if (!window.localStorage.getItem(DISCLAIMER_ACK_KEY)) {
+        setShowDisclaimer(true);
+      }
+    } catch {
+      setShowDisclaimer(true); // storage unavailable — show every visit
+    }
+  }, []);
+
+  const dismissDisclaimer = () => {
+    setShowDisclaimer(false);
+    try {
+      window.localStorage.setItem(DISCLAIMER_ACK_KEY, new Date().toISOString());
+    } catch {
+      /* storage unavailable — it will show again next visit */
+    }
+  };
 
   // 3D driver's-eye view (Phase 3).
   const [threeDOpen, setThreeDOpen] = useState(false);
@@ -1162,6 +1186,27 @@ export default function SplayCheckApp() {
             </div>
           )}
       </div>
+
+      {/* Cookie-consent-style disclaimer banner (until acknowledged) */}
+      {showDisclaimer && (
+        <div className="splaycheck-no-export absolute inset-x-0 bottom-0 z-30 border-t border-slate-700 bg-slate-900/95 px-4 py-3 shadow-[0_-8px_24px_rgba(0,0,0,0.45)] backdrop-blur">
+          <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-center gap-x-5 gap-y-2">
+            <p className="text-sm leading-5 text-slate-200">
+              ⚠ This tool is for preliminary analysis and is not an alternative
+              to site visits.{" "}
+              <span className="whitespace-nowrap font-semibold text-amber-300">
+                — Bilal Choudhury
+              </span>
+            </p>
+            <button
+              onClick={dismissDisclaimer}
+              className="shrink-0 rounded-md bg-sky-600 px-4 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-sky-500"
+            >
+              Understood
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
