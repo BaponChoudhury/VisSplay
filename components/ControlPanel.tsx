@@ -51,6 +51,24 @@ interface Props {
   onDesignUpdate: (patch: Partial<DesignOverlaySettings>) => void;
   onDesignAdjust: (v: boolean) => void;
   onDesignRemove: () => void;
+  levelsSelecting: boolean;
+  levelsBusy: boolean;
+  levelsError: string | null;
+  levelsSummary: {
+    minZ: number;
+    maxZ: number;
+    maxDepth: number;
+    pondFraction: number;
+    sourceName: string;
+  } | null;
+  levelsIntervalM: number;
+  levelsOpacity: number;
+  levelsVisible: boolean;
+  onLevelsSelect: () => void;
+  onLevelsInterval: (v: number) => void;
+  onLevelsOpacity: (v: number) => void;
+  onLevelsVisible: (v: boolean) => void;
+  onLevelsClear: () => void;
   mapType: "hybrid" | "roadmap";
   onMapType: (t: "hybrid" | "roadmap") => void;
   siteName: string;
@@ -151,6 +169,107 @@ export default function ControlPanel(props: Props) {
           onAdjust={props.onDesignAdjust}
           onRemove={props.onDesignRemove}
         />
+
+        {/* Ground levels & ponding (EA LiDAR) */}
+        <div className={sectionCls}>
+          <div className={headingCls}>Ground levels &amp; ponding</div>
+          <button
+            className={`${
+              props.levelsSelecting ? btnPrimary : btnSecondary
+            } w-full`}
+            disabled={props.levelsBusy || props.mapsStatus !== "ready"}
+            onClick={props.onLevelsSelect}
+            title="Draw a box on the map; contours, low/high points and predicted ponding come from Environment Agency LiDAR (England)"
+          >
+            {props.levelsBusy
+              ? "Fetching EA LiDAR\u2026"
+              : props.levelsSelecting
+                ? "Click two corners on the map\u2026 (Esc cancels)"
+                : "\u26f0 Analyse ground levels in an area"}
+          </button>
+          {props.levelsError && (
+            <p className="mt-1.5 rounded-md border border-red-500/40 bg-red-500/10 px-2 py-1 text-xs text-red-300">
+              {props.levelsError}
+            </p>
+          )}
+          {props.levelsSummary && (
+            <>
+              <div className="mt-2">
+                <ResultRow
+                  label={"Lowest ground \u25bc"}
+                  value={`${props.levelsSummary.minZ.toFixed(2)} m AOD`}
+                />
+                <ResultRow
+                  label={"Highest ground \u25b2"}
+                  value={`${props.levelsSummary.maxZ.toFixed(2)} m AOD`}
+                />
+                <ResultRow
+                  label={"Deepest ponding \ud83d\udca7"}
+                  value={
+                    props.levelsSummary.maxDepth > 0.02
+                      ? `${props.levelsSummary.maxDepth.toFixed(2)} m`
+                      : "drains"
+                  }
+                />
+                <ResultRow
+                  label="Area that ponds"
+                  value={`${(props.levelsSummary.pondFraction * 100).toFixed(0)} %`}
+                />
+              </div>
+              <div className="mt-2 text-xs font-medium text-slate-400">
+                Contour interval
+              </div>
+              <div className="mt-1 flex gap-1.5">
+                {[0.1, 0.25, 0.5, 1].map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => props.onLevelsInterval(v)}
+                    className={`${btnBase} flex-1 border ${
+                      props.levelsIntervalM === v
+                        ? "border-sky-500 bg-sky-600/20 text-sky-300"
+                        : "border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700"
+                    }`}
+                  >
+                    {v} m
+                  </button>
+                ))}
+              </div>
+              <div className="mt-2 text-xs font-medium text-slate-400">
+                Opacity — {Math.round(props.levelsOpacity * 100)}%
+              </div>
+              <input
+                type="range"
+                min={0.2}
+                max={1}
+                step={0.05}
+                value={props.levelsOpacity}
+                onChange={(e) => props.onLevelsOpacity(Number(e.target.value))}
+                className="mt-1 w-full accent-sky-500"
+              />
+              <div className="mt-2 flex gap-2">
+                <button
+                  className={`${btnSecondary} flex-1`}
+                  onClick={() => props.onLevelsVisible(!props.levelsVisible)}
+                >
+                  {props.levelsVisible ? "Hide" : "Show"}
+                </button>
+                <button
+                  className={`${btnSecondary} flex-1`}
+                  onClick={props.onLevelsClear}
+                >
+                  Remove
+                </button>
+              </div>
+            </>
+          )}
+          <p className="mt-2 text-xs leading-4 text-slate-500">
+            Environment Agency LiDAR composite DTM (bare-earth,{" "}
+            <span className="text-slate-300">England only</span>, open data).
+            Blue shading = predicted ponding depth before water spills out of
+            the area; brown lines = contours. Existing ground at the survey
+            date — a desktop indicator, verify levels on site.
+          </p>
+        </div>
 
         {/* Drawing */}
         <div className={sectionCls}>

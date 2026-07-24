@@ -58,6 +58,27 @@ very large images are dropped from the save with a warning) and is included
 in the PNG export. Note the 3D sightline check still tests against the
 *existing* 3D tiles, so it reflects current features, not the proposed works.
 
+## Ground levels & ponding (EA LiDAR)
+
+**⛰ Analyse ground levels in an area** — click two corners of a box on the
+map (up to 500 m square) and the tool fetches the **Environment Agency LiDAR
+composite DTM** (bare-earth, ±5–15 cm vertical, open data, England only — no
+API key needed) and overlays:
+
+- a hypsometric elevation tint with **contours** (0.1 / 0.25 / 0.5 / 1 m
+  interval, index contours emphasised),
+- **▼ lowest** and **▲ highest** ground markers (m AOD),
+- **💧 predicted ponding** — a priority-flood depression fill shades where
+  water would collect before spilling out of the selected area, deeper =
+  more opaque blue, with the deepest point marked.
+
+The panel reports lowest/highest ground, deepest ponding and the ponded
+fraction of the area; the overlay is included in the PNG export with a
+summary row. The EA image service is discovered at runtime from the Defra
+services directory, so new composite releases are picked up automatically.
+Levels reflect *existing* ground at the LiDAR survey date — a desktop
+indicator, not a substitute for a topographical survey.
+
 ## Architecture notes
 
 - `lib/standards.ts` — all standards values (SSD tables, X options, eye
