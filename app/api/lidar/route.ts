@@ -14,6 +14,8 @@
 import { NextRequest } from "next/server";
 
 export const runtime = "nodejs";
+// Several upstream attempts may run before one succeeds.
+export const maxDuration = 60;
 // Elevation data for a fixed area never changes; let Vercel cache it.
 export const revalidate = 86400;
 
@@ -31,7 +33,7 @@ const WCS_SLUGS = [
   "lidar-composite-digital-terrain-model-dtm-2m",
 ];
 
-const UPSTREAM_TIMEOUT_MS = 12000;
+const UPSTREAM_TIMEOUT_MS = 7000;
 
 interface Attempt {
   label: string;
@@ -44,6 +46,31 @@ async function get(url: string, accept: string): Promise<Response> {
     signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     next: { revalidate },
   });
+}
+
+/** Short, readable summary of a failed response body (XML/JSON/text). */
+async function bodySummary(res: Response): Promise<string> {
+  try {
+    const text = (await res.text()).trim();
+    if (!text) return "empty body";
+    const xml = /<(?:\w+:)?(?:ExceptionText|ServiceException|Message)[^>]*>([^<]+)</i.exec(
+      text
+    );
+    if (xml) return xml[1].trim().slice(0, 220);
+    try {
+      const j = JSON.parse(text) as {
+        error?: { message?: string; details?: string[] };
+      };
+      if (j.error?.message) {
+        return [j.error.message, ...(j.error.details ?? [])].join("; ").slice(0, 220);
+      }
+    } catch {
+      /* not JSON */
+    }
+    return text.replace(/\s+/g, " ").slice(0, 220);
+  } catch {
+    return "unreadable body";
+  }
 }
 
 /** A TIFF starts with "II"/"MM"; anything else is an error document. */
@@ -87,7 +114,10 @@ async function tryImageServer(
       "image/tiff"
     );
     if (!res.ok) {
-      attempts.push({ label, detail: `HTTP ${res.status}` });
+      attempts.push({
+        label,
+        detail: `HTTP ${res.status} - ${await bodySummary(res)}`,
+      });
       return null;
     }
     const buf = await res.arrayBuffer();
@@ -134,7 +164,10 @@ async function tryWcs(
       "application/xml"
     );
     if (!capRes.ok) {
-      attempts.push({ label, detail: `GetCapabilities HTTP ${capRes.status}` });
+      attempts.push({
+        label,
+        detail: `GetCapabilities HTTP ${capRes.status} - ${await bodySummary(capRes)}`,
+      });
       return null;
     }
     const capXml = await capRes.text();
@@ -189,7 +222,10 @@ async function tryWcs(
         `&coverageId=${encodeURIComponent(coverageId)}&format=image/tiff&${variants[i]}`;
       const res = await get(url, "image/tiff");
       if (!res.ok) {
-        attempts.push({ label: `${label} v${i + 1}`, detail: `HTTP ${res.status}` });
+        attempts.push({
+          label: `${label} v${i + 1}`,
+          detail: `HTTP ${res.status} - ${await bodySummary(res)}`,
+        });
         continue;
       }
       const buf = await res.arrayBuffer();
@@ -204,6 +240,97 @@ async function tryWcs(
   }
 }
 
+/**
+ * OGC WCS 1.0.0 GetCoverage. Much simpler than 2.0.1 — a plain bbox plus
+ * width/height, with no axis-label or subset-CRS negotiation to get wrong —
+ * and still widely supported, so it is tried first.
+ */
+async function tryWcs100(
+  slug: string,
+  box: { south: number; west: number; north: number; east: number },
+  w: number,
+  h: number,
+  attempts: Attempt[]
+): Promise<ArrayBuffer | null> {
+  const base = `${WCS_BASE}/${slug}/wcs`;
+  const label = `WCS1.0 ${slug.replace("lidar-composite-digital-terrain-model-", "")}`;
+  try {
+    const capRes = await get(
+      `${base}?service=WCS&version=1.0.0&request=GetCapabilities`,
+      "application/xml"
+    );
+    if (!capRes.ok) {
+      attempts.push({
+        label,
+        detail: `GetCapabilities HTTP ${capRes.status} - ${await bodySummary(capRes)}`,
+      });
+      return null;
+    }
+    const capXml = await capRes.text();
+    // In 1.0.0 the coverage is identified by <name> inside CoverageOfferingBrief.
+    const name =
+      /<(?:\w+:)?CoverageOfferingBrief[\s\S]*?<(?:\w+:)?name[^>]*>([^<]+)</i.exec(
+        capXml
+      )?.[1]?.trim() ?? firstTag(capXml, "name");
+    if (!name) {
+      attempts.push({ label, detail: `no coverage name (${capXml.slice(0, 120)})` });
+      return null;
+    }
+
+    // bbox is minx,miny,maxx,maxy in the given CRS (lon/lat for EPSG:4326).
+    const variants = [
+      `coverage=${encodeURIComponent(name)}&bbox=${box.west},${box.south},${box.east},${box.north}` +
+        `&crs=EPSG:4326&response_crs=EPSG:4326&format=GeoTIFF&width=${w}&height=${h}`,
+      `coverage=${encodeURIComponent(name)}&bbox=${box.west},${box.south},${box.east},${box.north}` +
+        `&crs=EPSG:4326&format=image/tiff&width=${w}&height=${h}`,
+    ];
+    for (let i = 0; i < variants.length; i++) {
+      const res = await get(
+        `${base}?service=WCS&version=1.0.0&request=GetCoverage&${variants[i]}`,
+        "image/tiff"
+      );
+      if (!res.ok) {
+        attempts.push({
+          label: `${label} v${i + 1}`,
+          detail: `HTTP ${res.status} - ${await bodySummary(res)}`,
+        });
+        continue;
+      }
+      const buf = await res.arrayBuffer();
+      const check = tiffOrError(buf);
+      if (check.ok) return buf;
+      attempts.push({ label: `${label} v${i + 1}`, detail: check.msg });
+    }
+    return null;
+  } catch (e) {
+    attempts.push({ label, detail: e instanceof Error ? e.message : String(e) });
+    return null;
+  }
+}
+
+/**
+ * Last-ditch diagnostics: ask the published MapServer to describe itself.
+ * It cannot supply elevation values, but its JSON says whether the service
+ * exists at all and what it is called, which is what a failure needs to show.
+ */
+async function probeMapServer(attempts: Attempt[]): Promise<void> {
+  for (const path of KNOWN_ARCGIS.slice(0, 1)) {
+    try {
+      const res = await get(`${REST_ROOT}/${path}/MapServer?f=json`, "application/json");
+      const body = await bodySummary(res);
+      attempts.push({
+        label: `MapServer ${path.split("/").pop()}`,
+        detail: `HTTP ${res.status} - ${body.slice(0, 160)}`,
+      });
+    } catch (e) {
+      attempts.push({
+        label: "MapServer probe",
+        detail: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+}
+
 /** Discover an ImageServer-published DTM, if one exists. Best effort. */
 async function discoverArcgisPaths(attempts: Attempt[]): Promise<string[]> {
   try {
@@ -212,10 +339,17 @@ async function discoverArcgisPaths(attempts: Attempt[]): Promise<string[]> {
       attempts.push({ label: "directory", detail: `HTTP ${res.status}` });
       return [];
     }
-    const root = (await res.json()) as {
-      folders?: string[];
-      services?: { name: string; type: string }[];
-    };
+    const rootText = await res.text();
+    let root: { folders?: string[]; services?: { name: string; type: string }[] };
+    try {
+      root = JSON.parse(rootText);
+    } catch {
+      attempts.push({
+        label: "directory",
+        detail: `not JSON: ${rootText.replace(/\s+/g, " ").slice(0, 160)}`,
+      });
+      return [];
+    }
     const found: { name: string; type: string }[] = [...(root.services ?? [])];
     const folders = (root.folders ?? []).filter((f) =>
       /survey|lidar|elevation|terrain/i.test(f)
@@ -236,7 +370,9 @@ async function discoverArcgisPaths(attempts: Attempt[]): Promise<string[]> {
     if (!dtm.length) {
       attempts.push({
         label: "directory",
-        detail: `no DTM among ${found.length} services`,
+        detail:
+          `no DTM among ${found.length} services; ` +
+          `folders=[${(root.folders ?? []).slice(0, 8).join(", ")}]`,
       });
     }
     return dtm;
@@ -273,27 +409,45 @@ export async function GET(req: NextRequest) {
   let buf: ArrayBuffer | null = null;
   let source = "";
 
-  const discovered = await discoverArcgisPaths(attempts);
-  const paths = Array.from(new Set([...discovered, ...KNOWN_ARCGIS]));
-  for (const path of paths.slice(0, 4)) {
-    buf = await tryImageServer(path, bboxMerc, px, py, attempts);
+  const box = { south, west, north, east };
+  const dtmName = (slug: string) =>
+    slug.replace("lidar-composite-digital-terrain-model-", "EA DTM ");
+
+  // WCS 1.0.0 first: the simplest syntax, so the least to get wrong.
+  for (const slug of WCS_SLUGS) {
+    buf = await tryWcs100(slug, box, px, py, attempts);
     if (buf) {
-      source = path.split("/").pop() ?? path;
+      source = dtmName(slug);
       break;
     }
   }
 
+  // Then WCS 2.0.1.
   if (!buf) {
     for (const slug of WCS_SLUGS) {
-      buf = await tryWcs(slug, { south, west, north, east }, px, py, attempts);
+      buf = await tryWcs(slug, box, px, py, attempts);
       if (buf) {
-        source = slug.replace("lidar-composite-digital-terrain-model-", "EA DTM ");
+        source = dtmName(slug);
+        break;
+      }
+    }
+  }
+
+  // Then an ImageServer, if the data happens to be published as one.
+  if (!buf) {
+    const discovered = await discoverArcgisPaths(attempts);
+    const paths = Array.from(new Set([...discovered, ...KNOWN_ARCGIS]));
+    for (const path of paths.slice(0, 3)) {
+      buf = await tryImageServer(path, bboxMerc, px, py, attempts);
+      if (buf) {
+        source = path.split("/").pop() ?? path;
         break;
       }
     }
   }
 
   if (!buf) {
+    await probeMapServer(attempts);
     return Response.json(
       {
         error: "No EA LiDAR endpoint returned elevation data.",
