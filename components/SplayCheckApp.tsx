@@ -1408,6 +1408,45 @@ export default function SplayCheckApp() {
         <div className="relative min-w-0 flex-1">
         <div ref={mapDivRef} className="h-full w-full" />
 
+        {/* Ground-levels tool: its own button on the map, so it is reachable
+            without hunting through the side panel. */}
+        {mapsState.status === "ready" && (
+          <div className="splaycheck-no-export absolute right-3 top-3 z-10 flex flex-col items-end gap-1.5">
+            <button
+              onClick={startLevelsSelect}
+              disabled={levelsBusy}
+              title="Click two opposite corners on the map to analyse ground levels, contours and water ponding (Environment Agency LiDAR, England)"
+              className={`rounded-lg border px-3.5 py-2 text-sm font-semibold shadow-xl transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                levelsSelecting
+                  ? "border-sky-400 bg-sky-600 text-white"
+                  : "border-slate-600 bg-slate-900/95 text-slate-100 hover:bg-slate-800"
+              }`}
+            >
+              {levelsBusy
+                ? "⏳ Fetching LiDAR…"
+                : levelsSelecting
+                  ? "◻ Click two corners…"
+                  : "⛰ Ground levels & ponding"}
+            </button>
+            {levelsAnalysis && !levelsBusy && (
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => setLevelsVisible(!levelsVisible)}
+                  className="rounded-md border border-slate-600 bg-slate-900/95 px-2.5 py-1 text-xs font-medium text-slate-200 shadow-lg hover:bg-slate-800"
+                >
+                  {levelsVisible ? "Hide" : "Show"}
+                </button>
+                <button
+                  onClick={clearLevels}
+                  className="rounded-md border border-slate-600 bg-slate-900/95 px-2.5 py-1 text-xs font-medium text-slate-200 shadow-lg hover:bg-slate-800"
+                >
+                  Clear
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {mapsState.status === "loading" && (
           <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 text-slate-400">
             Loading Google Maps…
