@@ -58,6 +58,32 @@ very large images are dropped from the save with a warning) and is included
 in the PNG export. Note the 3D sightline check still tests against the
 *existing* 3D tiles, so it reflects current features, not the proposed works.
 
+## Ground levels & ponding (EA LiDAR)
+
+**⛰ Analyse ground levels in an area** — click two corners of a box on the
+map (up to 500 m square) and the tool fetches the **Environment Agency LiDAR
+composite DTM** (bare-earth, ±5–15 cm vertical, open data, England only — no
+API key needed) and overlays:
+
+- a hypsometric elevation tint with **contours** (0.1 / 0.25 / 0.5 / 1 m
+  interval, index contours emphasised),
+- **▼ lowest** and **▲ highest** ground markers (m AOD),
+- **💧 predicted ponding** — a priority-flood depression fill shades where
+  water would collect before spilling out of the selected area, deeper =
+  more opaque blue, with the deepest point marked.
+
+The panel reports lowest/highest ground, deepest ponding and the ponded
+fraction of the area; the overlay is included in the PNG export with a
+summary row. Levels reflect *existing* ground at the LiDAR survey date — a
+desktop indicator, not a substitute for a topographical survey.
+
+The EA endpoints send no CORS headers, so a browser cannot call them
+directly. Requests go through `app/api/lidar/route.ts`, which runs
+server-side: it discovers the ArcGIS service, then tries ImageServer
+`exportImage` (raw Float32 values) and the documented OGC WCS 2.0.1
+coverages (1 m, then 2 m). If every endpoint fails it returns a 502 listing
+each attempt and what it returned, which the panel shows verbatim.
+
 ## Architecture notes
 
 - `lib/standards.ts` — all standards values (SSD tables, X options, eye

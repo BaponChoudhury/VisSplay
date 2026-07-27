@@ -96,6 +96,8 @@ export async function exportSplayPng(opts: {
   siteName: string;
   /** Superimposed design layout to redraw under the splay, if placed. */
   design?: DesignOverlaySettings | null;
+  /** Ground-levels raster (EA LiDAR) to redraw beneath everything, if run. */
+  levels?: { overlay: DesignOverlaySettings | null; summary: string } | null;
   /** Hide live overlays before capture, restore after. */
   setOverlaysVisible: (visible: boolean) => void;
 }): Promise<void> {
@@ -107,6 +109,7 @@ export async function exportSplayPng(opts: {
     results,
     siteName,
     design,
+    levels,
     setOverlaysVisible,
   } = opts;
 
@@ -127,9 +130,8 @@ export async function exportSplayPng(opts: {
 
   const mapW = capture.width;
   const mapH = capture.height;
-  // 232 base + a summary row when a design overlay is placed + the personal
-  // disclaimer line.
-  const blockH = 232 + (design ? 20 : 0) + 17;
+  // 232 base + a summary row per optional overlay + the personal disclaimer.
+  const blockH = 232 + (design ? 20 : 0) + (levels ? 20 : 0) + 17;
 
   const out = document.createElement("canvas");
   out.width = mapW;
@@ -139,29 +141,31 @@ export async function exportSplayPng(opts: {
 
   ctx.drawImage(capture, 0, 0);
 
-  // ---- Redraw the design layout overlay ------------------------------------
-  // Same coordinate maths as the live overlay: centre pixel, pixel width from
+  // ---- Redraw ground overlays (levels raster, then design layout) ----------
+  // Same coordinate maths as the live overlays: centre pixel, pixel width from
   // the projected west/east edge midpoints, rotation applied on the canvas.
-  if (design?.visible) {
+  const drawGroundOverlay = async (o: DesignOverlaySettings) => {
     try {
-      const img = await loadImage(design.imageDataUrl);
-      const c = toContainerPixel(map, design.center);
-      const wPt = toContainerPixel(map, offsetM(design.center, design.widthM / 2, 270));
-      const ePt = toContainerPixel(map, offsetM(design.center, design.widthM / 2, 90));
+      const img = await loadImage(o.imageDataUrl);
+      const c = toContainerPixel(map, o.center);
+      const wPt = toContainerPixel(map, offsetM(o.center, o.widthM / 2, 270));
+      const ePt = toContainerPixel(map, offsetM(o.center, o.widthM / 2, 90));
       if (c && wPt && ePt && img.naturalWidth > 0) {
         const pxW = Math.hypot(ePt.x - wPt.x, ePt.y - wPt.y);
         const pxH = pxW * (img.naturalHeight / img.naturalWidth);
         ctx.save();
         ctx.translate(c.x, c.y);
-        ctx.rotate((design.rotationDeg * Math.PI) / 180);
-        ctx.globalAlpha = design.opacity;
+        ctx.rotate((o.rotationDeg * Math.PI) / 180);
+        ctx.globalAlpha = o.opacity;
         ctx.drawImage(img, -pxW / 2, -pxH / 2, pxW, pxH);
         ctx.restore();
       }
     } catch (err) {
-      console.error("SplayCheck export: design overlay redraw failed:", err);
+      console.error("SplayCheck export: overlay redraw failed:", err);
     }
-  }
+  };
+  if (levels?.overlay?.visible) await drawGroundOverlay(levels.overlay);
+  if (design?.visible) await drawGroundOverlay(design);
 
   // ---- Redraw the splay geometry ------------------------------------------
   const { mouth, origin, left, right } = points;
@@ -225,6 +229,9 @@ export async function exportSplayPng(opts: {
 
   const rows: [string, string][] = [
     ["Site", siteName || "Unnamed site"],
+    ...(levels
+      ? ([["Ground levels", levels.summary]] as [string, string][])
+      : []),
     ...(design
       ? ([
           [

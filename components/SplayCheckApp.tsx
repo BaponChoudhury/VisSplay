@@ -28,6 +28,14 @@ import {
   createDesignOverlay,
   type DesignOverlayHandle,
 } from "@/lib/designOverlay";
+import {
+  LEVELS_MAX_SIDE_M,
+  LEVELS_MIN_SIDE_M,
+  analyseLevels,
+  fetchDtmGrid,
+  renderLevelsImage,
+  type LevelsAnalysis,
+} from "@/lib/terrain";
 import dynamic from "next/dynamic";
 import ControlPanel from "./ControlPanel";
 
@@ -118,6 +126,10 @@ export default function SplayCheckApp() {
     move: google.maps.Marker | null;
     corner: google.maps.Marker | null;
   }>({ move: null, corner: null });
+  const levelsOverlayRef = useRef<DesignOverlayHandle | null>(null);
+  const levelsMarkersRef = useRef<google.maps.Marker[]>([]);
+  const levelsRectRef = useRef<google.maps.Rectangle | null>(null);
+  const levelsCorner1Ref = useRef<LatLng | null>(null);
 
   const [mapReady, setMapReady] = useState(false);
   const [mode, setMode] = useState<Mode>("manual");
@@ -164,6 +176,16 @@ export default function SplayCheckApp() {
   const [designAdjust, setDesignAdjust] = useState(false);
   const [designAspect, setDesignAspect] = useState<number | null>(null);
 
+  // Ground levels & ponding (EA LiDAR).
+  const [levelsSelecting, setLevelsSelecting] = useState(false);
+  const [levelsBusy, setLevelsBusy] = useState(false);
+  const [levelsError, setLevelsError] = useState<string | null>(null);
+  const [levelsAnalysis, setLevelsAnalysis] = useState<LevelsAnalysis | null>(null);
+  const [levelsImgUrl, setLevelsImgUrl] = useState<string | null>(null);
+  const [levelsIntervalM, setLevelsIntervalM] = useState(0.25);
+  const [levelsOpacity, setLevelsOpacity] = useState(0.7);
+  const [levelsVisible, setLevelsVisible] = useState(true);
+
   // Latest-state ref so persistent map listeners never see stale closures.
   const liveRef = useRef({
     step,
@@ -176,6 +198,8 @@ export default function SplayCheckApp() {
     design,
     designAspect,
     designAdjust,
+    levelsSelecting,
+    levelsIntervalM,
   });
   liveRef.current = {
     step,
@@ -188,6 +212,8 @@ export default function SplayCheckApp() {
     design,
     designAspect,
     designAdjust,
+    levelsSelecting,
+    levelsIntervalM,
   };
 
   // ---------------------------------------------------------------- results
@@ -220,6 +246,20 @@ export default function SplayCheckApp() {
       measurePtsRef.current = next;
       drawMeasure(next);
       setMeasureDist(next.length === 2 ? distanceM(next[0], next[1]) : null);
+      return;
+    }
+
+    if (live.levelsSelecting) {
+      const c1 = levelsCorner1Ref.current;
+      if (!c1) {
+        levelsCorner1Ref.current = pos;
+      } else {
+        setLevelsSelecting(false);
+        levelsCorner1Ref.current = null;
+        levelsRectRef.current?.setMap(null);
+        levelsRectRef.current = null;
+        void runLevels(c1, pos);
+      }
       return;
     }
 
@@ -274,6 +314,27 @@ export default function SplayCheckApp() {
     const live = liveRef.current;
     const map = mapRef.current;
     if (!map) return;
+
+    if (live.levelsSelecting && levelsCorner1Ref.current) {
+      const c1 = levelsCorner1Ref.current;
+      if (!levelsRectRef.current) {
+        levelsRectRef.current = new google.maps.Rectangle({
+          map,
+          clickable: false,
+          fillColor: "#38bdf8",
+          fillOpacity: 0.08,
+          strokeColor: "#38bdf8",
+          strokeWeight: 1.5,
+        });
+      }
+      levelsRectRef.current.setBounds(
+        new google.maps.LatLngBounds(
+          { lat: Math.min(c1.lat, pos.lat), lng: Math.min(c1.lng, pos.lng) },
+          { lat: Math.max(c1.lat, pos.lat), lng: Math.max(c1.lng, pos.lng) }
+        )
+      );
+    }
+
     if (live.step !== "origin" || !live.points.mouth) {
       clearGhost();
       return;
@@ -740,6 +801,76 @@ export default function SplayCheckApp() {
     );
   }, [mapReady, design, designAdjust, designAspect]);
 
+  // ------------------------------------------- levels overlay lifecycle
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map) return;
+    const clearMarkers = () => {
+      levelsMarkersRef.current.forEach((m) => m.setMap(null));
+      levelsMarkersRef.current = [];
+    };
+    const settings = levelsOverlaySettings();
+    if (!settings) {
+      levelsOverlayRef.current?.remove();
+      levelsOverlayRef.current = null;
+      clearMarkers();
+      return;
+    }
+    if (!levelsOverlayRef.current) {
+      levelsOverlayRef.current = createDesignOverlay(map, settings);
+    } else {
+      levelsOverlayRef.current.update(settings);
+    }
+
+    clearMarkers();
+    if (levelsAnalysis && levelsVisible) {
+      const mk = (pos: LatLng, text: string, color: string) =>
+        new google.maps.Marker({
+          map,
+          position: pos,
+          clickable: false,
+          zIndex: 35,
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 4,
+            fillColor: color,
+            fillOpacity: 1,
+            strokeColor: "#ffffff",
+            strokeWeight: 1.5,
+          },
+          label: {
+            text,
+            color,
+            fontSize: "11px",
+            fontWeight: "700",
+            className: "splay-handle-label",
+          },
+        });
+      levelsMarkersRef.current.push(
+        mk(
+          levelsAnalysis.minPt,
+          `\u25bc low ${levelsAnalysis.minZ.toFixed(2)} m`,
+          "#7dd3fc"
+        ),
+        mk(
+          levelsAnalysis.maxPt,
+          `\u25b2 high ${levelsAnalysis.maxZ.toFixed(2)} m`,
+          "#fca5a5"
+        )
+      );
+      if (levelsAnalysis.maxDepthPt) {
+        levelsMarkersRef.current.push(
+          mk(
+            levelsAnalysis.maxDepthPt,
+            `\ud83d\udca7 ponds ${levelsAnalysis.maxDepth.toFixed(2)} m`,
+            "#60a5fa"
+          )
+        );
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady, levelsAnalysis, levelsImgUrl, levelsOpacity, levelsVisible]);
+
   // Google Maps needs a resize nudge when the split layout changes width.
   useEffect(() => {
     const map = mapRef.current;
@@ -769,6 +900,11 @@ export default function SplayCheckApp() {
         } else if (liveRef.current.measuring) {
           setMeasuring(false);
           clearMeasure();
+        } else if (liveRef.current.levelsSelecting) {
+          setLevelsSelecting(false);
+          levelsCorner1Ref.current = null;
+          levelsRectRef.current?.setMap(null);
+          levelsRectRef.current = null;
         } else if (liveRef.current.designAdjust) {
           setDesignAdjust(false);
         } else if (
@@ -898,6 +1034,100 @@ export default function SplayCheckApp() {
     setDesign(null);
     setDesignAdjust(false);
     setDesignAspect(null);
+  };
+
+  // ------------------------------------------ ground levels & ponding
+  const startLevelsSelect = () => {
+    if (levelsBusy) return;
+    setLevelsError(null);
+    levelsCorner1Ref.current = null;
+    levelsRectRef.current?.setMap(null);
+    levelsRectRef.current = null;
+    setLevelsSelecting((v) => !v);
+  };
+
+  const clearLevels = () => {
+    setLevelsSelecting(false);
+    setLevelsAnalysis(null);
+    setLevelsImgUrl(null);
+    setLevelsError(null);
+    levelsCorner1Ref.current = null;
+    levelsRectRef.current?.setMap(null);
+    levelsRectRef.current = null;
+  };
+
+  const runLevels = async (c1: LatLng, c2: LatLng) => {
+    // Clamp the box to the maximum side, keeping the first corner fixed.
+    const mPerLat = 111320;
+    const mPerLng = 111320 * Math.cos((c1.lat * Math.PI) / 180);
+    const clampTo = (from: number, to: number, mPerUnit: number) => {
+      const d = Math.abs(to - from) * mPerUnit;
+      return d <= LEVELS_MAX_SIDE_M
+        ? to
+        : from + Math.sign(to - from) * (LEVELS_MAX_SIDE_M / mPerUnit);
+    };
+    const c2c: LatLng = {
+      lat: clampTo(c1.lat, c2.lat, mPerLat),
+      lng: clampTo(c1.lng, c2.lng, mPerLng),
+    };
+    if (
+      Math.abs(c2c.lat - c1.lat) * mPerLat < LEVELS_MIN_SIDE_M ||
+      Math.abs(c2c.lng - c1.lng) * mPerLng < LEVELS_MIN_SIDE_M
+    ) {
+      flash(
+        `Levels area too small — make it at least ${LEVELS_MIN_SIDE_M} m each way.`
+      );
+      return;
+    }
+    setLevelsBusy(true);
+    setLevelsError(null);
+    try {
+      const { grid, sourceName } = await fetchDtmGrid(c1, c2c);
+      const analysis = analyseLevels(grid, sourceName);
+      setLevelsAnalysis(analysis);
+      setLevelsImgUrl(
+        renderLevelsImage(analysis, liveRef.current.levelsIntervalM)
+      );
+      setLevelsVisible(true);
+      flash(
+        analysis.maxDepth > 0.02
+          ? `Deepest predicted ponding: ${analysis.maxDepth.toFixed(2)} m (before overspill).`
+          : "Area drains — no ponding deeper than 2 cm predicted."
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setLevelsError(msg);
+      flash(`Ground levels failed: ${msg}`);
+    } finally {
+      setLevelsBusy(false);
+    }
+  };
+
+  const updateLevelsInterval = (v: number) => {
+    setLevelsIntervalM(v);
+    if (levelsAnalysis) setLevelsImgUrl(renderLevelsImage(levelsAnalysis, v));
+  };
+
+  /** Levels raster as overlay settings (shared by the map overlay and export). */
+  const levelsOverlaySettings = (): DesignOverlaySettings | null => {
+    if (!levelsAnalysis || !levelsImgUrl) return null;
+    const g = levelsAnalysis.grid;
+    const center: LatLng = {
+      lat: (g.south + g.north) / 2,
+      lng: (g.west + g.east) / 2,
+    };
+    return {
+      imageDataUrl: levelsImgUrl,
+      imageName: "EA LiDAR ground levels",
+      center,
+      widthM: distanceM(
+        { lat: center.lat, lng: g.west },
+        { lat: center.lat, lng: g.east }
+      ),
+      rotationDeg: 0,
+      opacity: levelsOpacity,
+      visible: levelsVisible,
+    };
   };
 
   const updateParams = (patch: Partial<SplayParams>) => {
@@ -1046,9 +1276,12 @@ export default function SplayCheckApp() {
     ghostLineRef.current?.setMap(map);
     designHandlesRef.current.move?.setMap(map);
     designHandlesRef.current.corner?.setMap(map);
-    // The design image is redrawn onto the export canvas from coordinates,
-    // like the splay geometry, so hide the live element during capture too.
+    levelsMarkersRef.current.forEach((m) => m.setMap(map));
+    levelsRectRef.current?.setMap(map);
+    // Overlay images are redrawn onto the export canvas from coordinates,
+    // like the splay geometry, so hide the live elements during capture too.
     designOverlayRef.current?.setHidden(!visible);
+    levelsOverlayRef.current?.setHidden(!visible);
   }, []);
 
   const doExport = async () => {
@@ -1065,6 +1298,17 @@ export default function SplayCheckApp() {
         results,
         siteName,
         design,
+        levels:
+          levelsAnalysis && levelsVisible
+            ? {
+                overlay: levelsOverlaySettings(),
+                summary: `min ${levelsAnalysis.minZ.toFixed(2)} m \u00b7 max ${levelsAnalysis.maxZ.toFixed(2)} m AOD \u00b7 worst ponding ${
+                  levelsAnalysis.maxDepth > 0.02
+                    ? `${levelsAnalysis.maxDepth.toFixed(2)} m`
+                    : "none"
+                } \u00b7 EA LiDAR`,
+              }
+            : null,
         setOverlaysVisible,
       });
     } catch (err) {
@@ -1086,9 +1330,13 @@ export default function SplayCheckApp() {
     ? measureDist != null
       ? `Measured: ${measureDist.toFixed(2)} m — click to start a new measurement, Esc to exit.`
       : "Measure — click two points on the map. Esc to exit."
-    : designAdjust && design && step !== "mouth" && step !== "origin" && step !== "left" && step !== "right"
-      ? "Align the design layout — drag the round handle to move the plan, the square corner handle to rotate & scale. Esc / toggle Adjust when the plan sits on the existing road."
-      : STEP_PROMPTS[step];
+    : levelsBusy
+      ? "Fetching EA LiDAR ground levels…"
+      : levelsSelecting
+        ? `Ground levels — click two opposite corners of the area to analyse (up to ${LEVELS_MAX_SIDE_M} m square). Esc cancels.`
+        : designAdjust && design && step !== "mouth" && step !== "origin" && step !== "left" && step !== "right"
+          ? "Align the design layout — drag the round handle to move the plan, the square corner handle to rotate & scale. Esc / toggle Adjust when the plan sits on the existing road."
+          : STEP_PROMPTS[step];
 
   return (
     <div className="relative flex h-screen w-screen overflow-hidden bg-slate-950">
@@ -1114,6 +1362,28 @@ export default function SplayCheckApp() {
         onDesignUpdate={updateDesign}
         onDesignAdjust={setDesignAdjust}
         onDesignRemove={removeDesign}
+        levelsSelecting={levelsSelecting}
+        levelsBusy={levelsBusy}
+        levelsError={levelsError}
+        levelsSummary={
+          levelsAnalysis
+            ? {
+                minZ: levelsAnalysis.minZ,
+                maxZ: levelsAnalysis.maxZ,
+                maxDepth: levelsAnalysis.maxDepth,
+                pondFraction: levelsAnalysis.pondFraction,
+                sourceName: levelsAnalysis.sourceName,
+              }
+            : null
+        }
+        levelsIntervalM={levelsIntervalM}
+        levelsOpacity={levelsOpacity}
+        levelsVisible={levelsVisible}
+        onLevelsSelect={startLevelsSelect}
+        onLevelsInterval={updateLevelsInterval}
+        onLevelsOpacity={setLevelsOpacity}
+        onLevelsVisible={setLevelsVisible}
+        onLevelsClear={clearLevels}
         mapType={mapType}
         onMapType={setMapType}
         siteName={siteName}
@@ -1137,6 +1407,45 @@ export default function SplayCheckApp() {
       <div className="flex min-w-0 flex-1">
         <div className="relative min-w-0 flex-1">
         <div ref={mapDivRef} className="h-full w-full" />
+
+        {/* Ground-levels tool: its own button on the map, so it is reachable
+            without hunting through the side panel. */}
+        {mapsState.status === "ready" && (
+          <div className="splaycheck-no-export absolute right-3 top-3 z-10 flex flex-col items-end gap-1.5">
+            <button
+              onClick={startLevelsSelect}
+              disabled={levelsBusy}
+              title="Click two opposite corners on the map to analyse ground levels, contours and water ponding (Environment Agency LiDAR, England)"
+              className={`rounded-lg border px-3.5 py-2 text-sm font-semibold shadow-xl transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                levelsSelecting
+                  ? "border-sky-400 bg-sky-600 text-white"
+                  : "border-slate-600 bg-slate-900/95 text-slate-100 hover:bg-slate-800"
+              }`}
+            >
+              {levelsBusy
+                ? "⏳ Fetching LiDAR…"
+                : levelsSelecting
+                  ? "◻ Click two corners…"
+                  : "⛰ Ground levels & ponding"}
+            </button>
+            {levelsAnalysis && !levelsBusy && (
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => setLevelsVisible(!levelsVisible)}
+                  className="rounded-md border border-slate-600 bg-slate-900/95 px-2.5 py-1 text-xs font-medium text-slate-200 shadow-lg hover:bg-slate-800"
+                >
+                  {levelsVisible ? "Hide" : "Show"}
+                </button>
+                <button
+                  onClick={clearLevels}
+                  className="rounded-md border border-slate-600 bg-slate-900/95 px-2.5 py-1 text-xs font-medium text-slate-200 shadow-lg hover:bg-slate-800"
+                >
+                  Clear
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {mapsState.status === "loading" && (
           <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 text-slate-400">
