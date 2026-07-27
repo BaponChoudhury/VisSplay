@@ -20,8 +20,7 @@
 
 import type { LatLng } from "./types";
 
-const IMAGE_SERVICES_ROOT =
-  "https://environment.data.gov.uk/image/rest/services/SURVEY";
+const REST_ROOT = "https://environment.data.gov.uk/image/rest/services";
 
 /** Longest side of the selected area, metres (keeps requests + analysis fast). */
 export const LEVELS_MAX_SIDE_M = 500;
@@ -73,58 +72,116 @@ const invMercY = (y: number) =>
 
 let cachedService: { url: string; name: string } | null = null;
 
+interface ArcGisDir {
+  folders?: string[];
+  services?: { name: string; type: string }[];
+}
+
+async function readDir(path: string): Promise<ArcGisDir | null> {
+  try {
+    const res = await fetch(`${REST_ROOT}${path ? `/${path}` : ""}?f=json`);
+    if (!res.ok) return null;
+    return (await res.json()) as ArcGisDir;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Find the EA LiDAR composite DTM image service. Prefers finer resolution
- * (1 m over 2 m) and newer composites. Throws with a readable message if the
- * directory can't be reached (wrong country, offline, service moved).
+ * Score a service name for "is this the bare-earth terrain model we want".
+ * Higher is better; null means it is not a DTM at all. Names look like
+ * "SURVEY/LIDAR_Composite_DTM_2022_1M", but the exact wording changes between
+ * releases, so match on meaning rather than one fixed string.
+ */
+function scoreDtmName(rawName: string): { score: number; resM: number } | null {
+  // Service names separate words with _ - and /, which are word characters to
+  // a regex `\b`, so normalise to spaces before matching whole words.
+  const name = rawName.replace(/[_\-/]+/g, " ");
+
+  // Bare-earth terrain only — never a surface model or a derived raster.
+  if (!/\bdtm\b|\bterrain\b/i.test(name)) return null;
+  if (/\bdsm\b|surface|hillshade|aspect|slope|contour|intensity|point ?cloud/i.test(name))
+    return null;
+
+  const resM = /\b25 ?cm\b|\b0?\.25 ?m\b/i.test(name)
+    ? 0.25
+    : /\b50 ?cm\b|\b0?\.5 ?m\b/i.test(name)
+      ? 0.5
+      : /\b1 ?m\b/i.test(name)
+        ? 1
+        : /\b2 ?m\b/i.test(name)
+          ? 2
+          : 99;
+  const year = Number(/\b(20\d\d)\b/.exec(name)?.[1] ?? 0);
+
+  let score = 100;
+  if (/composite/i.test(name)) score += 50; // seamless national coverage
+  if (/lidar/i.test(name)) score += 20;
+  if (/national/i.test(name)) score += 10;
+  score -= resM === 99 ? 20 : resM * 10; // prefer finer grids
+  score += (year - 2000) * 0.5; // prefer newer releases
+  return { score, resM };
+}
+
+/**
+ * Find the EA LiDAR bare-earth DTM image service by walking the ArcGIS REST
+ * directory (root + folders). Discovery rather than a hard-coded URL, so a
+ * renamed or re-foldered dataset keeps working. Result is cached per session.
  */
 export async function discoverDtmService(): Promise<{
   url: string;
   name: string;
 }> {
   if (cachedService) return cachedService;
-  const res = await fetch(`${IMAGE_SERVICES_ROOT}?f=json`);
-  if (!res.ok) {
+
+  const root = await readDir("");
+  if (!root) {
     throw new Error(
-      `EA survey-data directory returned ${res.status} — the Defra service may be down or unreachable.`
+      "Could not reach the Defra spatial-data directory — it may be down, or your network is blocking it."
     );
   }
-  const dir = (await res.json()) as {
-    services?: { name: string; type: string }[];
-  };
-  const candidates = (dir.services ?? [])
-    .filter(
-      (s) =>
-        s.type === "ImageServer" &&
-        /lidar/i.test(s.name) &&
-        /composite/i.test(s.name) &&
-        /dtm/i.test(s.name) &&
-        !/hillshade|aspect|slope/i.test(s.name)
-    )
-    .map((s) => {
-      const year = Number(/(20\d\d)/.exec(s.name)?.[1] ?? 0);
-      const resM = /25cm|0?\.25m/i.test(s.name)
-        ? 0.25
-        : /50cm|0?\.5m/i.test(s.name)
-          ? 0.5
-          : /1m/i.test(s.name)
-            ? 1
-            : /2m/i.test(s.name)
-              ? 2
-              : 99;
-      return { ...s, year, resM };
-    })
-    // finest first; among equals, newest first
-    .sort((a, b) => a.resM - b.resM || b.year - a.year);
-  const best = candidates[0];
+
+  const all: { name: string; type: string }[] = [...(root.services ?? [])];
+
+  // Services usually live in folders (SURVEY, Survey, …) — search those too,
+  // most-likely-looking first, and stop early once we have candidates.
+  const folders = (root.folders ?? []).sort((a, b) => {
+    const rank = (f: string) =>
+      /survey|lidar|elevation|terrain/i.test(f) ? 0 : 1;
+    return rank(a) - rank(b);
+  });
+  const MAX_FOLDERS = 20;
+  const dirs = await Promise.all(
+    folders.slice(0, MAX_FOLDERS).map((f) => readDir(f))
+  );
+  dirs.forEach((d) => {
+    if (d?.services) all.push(...d.services);
+  });
+
+  const imageServers = all.filter((s) => s.type === "ImageServer");
+  const ranked = imageServers
+    .map((s) => ({ s, m: scoreDtmName(s.name) }))
+    .filter((r): r is { s: { name: string; type: string }; m: { score: number; resM: number } } => r.m != null)
+    .sort((a, b) => b.m.score - a.m.score);
+
+  const best = ranked[0]?.s;
   if (!best) {
+    // Name what WAS found — makes a renamed dataset diagnosable at a glance
+    // instead of a dead end.
+    const sample = imageServers
+      .slice(0, 8)
+      .map((s) => s.name)
+      .join(", ");
     throw new Error(
-      "No LiDAR composite DTM service found in the Defra directory — the dataset may have moved."
+      `No bare-earth DTM service found among ${imageServers.length} Defra image services${
+        sample ? ` (e.g. ${sample})` : ""
+      } — the dataset may have been renamed.`
     );
   }
+
   cachedService = {
-    url: `https://environment.data.gov.uk/image/rest/services/${best.name}/ImageServer`,
-    name: best.name.replace(/^SURVEY\//, ""),
+    url: `${REST_ROOT}/${best.name}/ImageServer`,
+    name: best.name.replace(/^[^/]+\//, ""),
   };
   return cachedService;
 }
