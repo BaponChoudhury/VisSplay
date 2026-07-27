@@ -74,10 +74,15 @@ API key needed) and overlays:
 
 The panel reports lowest/highest ground, deepest ponding and the ponded
 fraction of the area; the overlay is included in the PNG export with a
-summary row. The EA image service is discovered at runtime from the Defra
-services directory, so new composite releases are picked up automatically.
-Levels reflect *existing* ground at the LiDAR survey date — a desktop
-indicator, not a substitute for a topographical survey.
+summary row. Levels reflect *existing* ground at the LiDAR survey date — a
+desktop indicator, not a substitute for a topographical survey.
+
+The EA endpoints send no CORS headers, so a browser cannot call them
+directly. Requests go through `app/api/lidar/route.ts`, which runs
+server-side: it discovers the ArcGIS service, then tries ImageServer
+`exportImage` (raw Float32 values) and the documented OGC WCS 2.0.1
+coverages (1 m, then 2 m). If every endpoint fails it returns a 502 listing
+each attempt and what it returned, which the panel shows verbatim.
 
 ## Architecture notes
 

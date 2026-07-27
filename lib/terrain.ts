@@ -4,34 +4,19 @@
  * Ground levels & ponding from Environment Agency LiDAR (England).
  *
  * Data: the EA "LIDAR Composite DTM" open dataset (bare-earth terrain,
- * ±5–15 cm vertical), served from the Defra Data Services Platform as an
- * ArcGIS ImageServer. The exact service name changes as new composites are
- * published, so the service is DISCOVERED at runtime: the SURVEY services
- * directory is listed and the finest/most recent composite DTM picked.
+ * ±5–15 cm vertical). The EA endpoints send no CORS headers, so the raster is
+ * fetched through this app's own /api/lidar route (server-side), which also
+ * holds the endpoint discovery and fallbacks.
  *
- * Pipeline: exportImage (GeoTIFF, Float32, Web Mercator) → geotiff.js →
- * elevation grid → analysis (min/max, contours by marching squares, ponding
- * by priority-flood depression filling) → a north-up PNG data URL that is
- * overlaid on the map exactly like the design-layout overlay.
+ * Pipeline: /api/lidar (GeoTIFF) → geotiff.js → elevation grid → analysis
+ * (min/max, contours by marching squares, ponding by priority-flood
+ * depression filling) → a north-up PNG data URL overlaid on the map exactly
+ * like the design-layout overlay.
  *
- * All requests run in the browser; the service is open data (OGL) and needs
- * no API key. England coverage only.
+ * Open data (OGL), no API key. England coverage only.
  */
 
 import type { LatLng } from "./types";
-
-const REST_ROOT = "https://environment.data.gov.uk/image/rest/services";
-const WCS_BASE = "https://environment.data.gov.uk/spatialdata";
-
-/**
- * EA composite DTM coverages exposed as OGC WCS, finest grid first. These are
- * the documented "give me the elevation values" endpoints; the ArcGIS
- * services for the same data are MapServers, which only render pictures.
- */
-const WCS_DTM_SLUGS = [
-  "lidar-composite-digital-terrain-model-dtm-1m",
-  "lidar-composite-digital-terrain-model-dtm-2m",
-];
 
 /** Longest side of the selected area, metres (keeps requests + analysis fast). */
 export const LEVELS_MAX_SIDE_M = 500;
@@ -79,302 +64,19 @@ const invMercX = (x: number) => (x / R) * (180 / Math.PI);
 const invMercY = (y: number) =>
   (2 * Math.atan(Math.exp(y / R)) - Math.PI / 2) * (180 / Math.PI);
 
-// ------------------------------------------------------- service discovery
-
-let cachedService: { url: string; name: string } | null = null;
-
-interface ArcGisDir {
-  folders?: string[];
-  services?: { name: string; type: string }[];
-}
-
-async function readDir(path: string): Promise<ArcGisDir | null> {
-  try {
-    const res = await fetch(`${REST_ROOT}${path ? `/${path}` : ""}?f=json`);
-    if (!res.ok) return null;
-    return (await res.json()) as ArcGisDir;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Score a service name for "is this the bare-earth terrain model we want".
- * Higher is better; null means it is not a DTM at all. Names look like
- * "SURVEY/LIDAR_Composite_DTM_2022_1M", but the exact wording changes between
- * releases, so match on meaning rather than one fixed string.
- */
-function scoreDtmName(rawName: string): { score: number; resM: number } | null {
-  // Names come in every style: LIDAR_Composite_DTM_2022_1M, but also
-  // LIDARCompositeDTM1m2022 with no separators at all. Regex word boundaries
-  // are useless for both (an underscore is a word character, and a run-on name
-  // has no boundaries), so match substrings and anchor on digits instead.
-  const name = rawName.replace(/[_\-/]+/g, " ");
-
-  // Bare-earth terrain only — never a surface model or a derived raster.
-  if (!/dtm|terrain/i.test(name)) return null;
-  if (/dsm|surface|hillshade|aspect|slope|contour|intensity|point ?cloud/i.test(name))
-    return null;
-
-  const resM = /(?:^|[^\d])(?:25 ?cm|0?\.25 ?m)(?![a-z])/i.test(name)
-    ? 0.25
-    : /(?:^|[^\d])(?:50 ?cm|0?\.5 ?m)(?![a-z])/i.test(name)
-      ? 0.5
-      : /(?:^|[^\d.])1 ?m(?![a-z])/i.test(name)
-        ? 1
-        : /(?:^|[^\d.])2 ?m(?![a-z])/i.test(name)
-          ? 2
-          : 99;
-  const year = Number(/(20\d\d)(?!\d)/.exec(name)?.[1] ?? 0);
-
-  let score = 100;
-  if (/composite/i.test(name)) score += 50; // seamless national coverage
-  if (/lidar/i.test(name)) score += 20;
-  if (/national/i.test(name)) score += 10;
-  score -= resM === 99 ? 20 : resM * 10; // prefer finer grids
-  score += (year - 2000) * 0.5; // prefer newer releases
-  return { score, resM };
-}
-
-/**
- * Find the EA LiDAR bare-earth DTM image service by walking the ArcGIS REST
- * directory (root + folders). Discovery rather than a hard-coded URL, so a
- * renamed or re-foldered dataset keeps working. Result is cached per session.
- */
-export async function discoverDtmService(): Promise<{
-  url: string;
-  name: string;
-}> {
-  if (cachedService) return cachedService;
-
-  const root = await readDir("");
-  if (!root) {
-    throw new Error(
-      "Could not reach the Defra spatial-data directory — it may be down, or your network is blocking it."
-    );
-  }
-
-  const all: { name: string; type: string }[] = [...(root.services ?? [])];
-
-  // Services usually live in folders (SURVEY, Survey, …) — search those too,
-  // most-likely-looking first, and stop early once we have candidates.
-  const folders = (root.folders ?? []).sort((a, b) => {
-    const rank = (f: string) =>
-      /survey|lidar|elevation|terrain/i.test(f) ? 0 : 1;
-    return rank(a) - rank(b);
-  });
-  const MAX_FOLDERS = 20;
-  const dirs = await Promise.all(
-    folders.slice(0, MAX_FOLDERS).map((f) => readDir(f))
-  );
-  dirs.forEach((d) => {
-    if (d?.services) all.push(...d.services);
-  });
-
-  // Both ImageServer and MapServer are worth listing: the EA publishes the
-  // composite DTM as a MapServer, and only an ImageServer can return raw
-  // values, so the type is checked when the data is actually requested.
-  const imageServers = all.filter(
-    (s) => s.type === "ImageServer" || s.type === "MapServer"
-  );
-  const ranked = imageServers
-    .map((s) => ({ s, m: scoreDtmName(s.name) }))
-    .filter((r): r is { s: { name: string; type: string }; m: { score: number; resM: number } } => r.m != null)
-    .sort((a, b) => b.m.score - a.m.score);
-
-  const best = ranked[0]?.s;
-  if (!best) {
-    // Name what WAS found — makes a renamed dataset diagnosable at a glance
-    // instead of a dead end.
-    const sample = imageServers
-      .slice(0, 8)
-      .map((s) => s.name)
-      .join(", ");
-    throw new Error(
-      `No bare-earth DTM service found among ${imageServers.length} Defra services${
-        sample ? ` (e.g. ${sample})` : ""
-      }.`
-    );
-  }
-
-  cachedService = {
-    url: `${REST_ROOT}/${best.name}/ImageServer`,
-    name: best.name.replace(/^[^/]+\//, ""),
-  };
-  return cachedService;
-}
-
 // ------------------------------------------------------------- DTM fetch
 
 /** True ground metres per Web-Mercator metre at this latitude. */
 const groundScale = (lat: number) => Math.cos((lat * Math.PI) / 180);
 
-/** One attempted data source, kept so failures can name what was tried. */
-interface Attempt {
-  label: string;
-  detail: string;
-}
-
-/** Decode an ArcGIS/OGC error that arrives as a 200 with a text body. */
-function decodeErrorBody(buf: ArrayBuffer): string | null {
-  if (buf.byteLength > 8192) return null; // too big to be an error blob
-  const text = new TextDecoder().decode(buf.slice(0, 2048)).trim();
-  if (!text || text.startsWith("II") || text.startsWith("MM")) return null; // TIFF magic
-  try {
-    const j = JSON.parse(text) as { error?: { message?: string } };
-    if (j.error?.message) return j.error.message;
-  } catch {
-    /* not JSON — fall through to XML/text */
-  }
-  const xml = /<(?:ows:)?ExceptionText[^>]*>([^<]+)</.exec(text);
-  if (xml) return xml[1].trim();
-  return text.slice(0, 200);
-}
-
 /**
- * ArcGIS ImageServer exportImage — returns the raster's real values as a
- * Float32 GeoTIFF. Only works where the dataset is published as an
- * ImageServer (a MapServer renders pictures instead, which is useless for
- * levels), so this is a probe: null means "not available here".
+ * Fetch the terrain grid for a box.
+ *
+ * The EA endpoints send no CORS headers, so the browser is not allowed to
+ * call them directly (it fails before the request is even sent). Everything
+ * upstream therefore goes through this app's own /api/lidar route, which runs
+ * server-side where the same-origin policy does not apply.
  */
-async function tryImageServer(
-  serviceUrl: string,
-  bboxMerc: [number, number, number, number],
-  w: number,
-  h: number,
-  attempts: Attempt[]
-): Promise<ArrayBuffer | null> {
-  const params = new URLSearchParams({
-    f: "image",
-    bbox: bboxMerc.join(","),
-    bboxSR: "3857",
-    imageSR: "3857",
-    size: `${w},${h}`,
-    format: "tiff",
-    pixelType: "F32",
-    interpolation: "RSP_BilinearInterpolation",
-  });
-  const url = `${serviceUrl}/exportImage?${params.toString()}`;
-  try {
-    const res = await fetch(url);
-    if (!res.ok) {
-      attempts.push({ label: "ImageServer", detail: `HTTP ${res.status}` });
-      return null;
-    }
-    const buf = await res.arrayBuffer();
-    const err = decodeErrorBody(buf);
-    if (err) {
-      attempts.push({ label: "ImageServer", detail: err });
-      return null;
-    }
-    return buf;
-  } catch (e) {
-    attempts.push({
-      label: "ImageServer",
-      detail: e instanceof Error ? e.message : String(e),
-    });
-    return null;
-  }
-}
-
-const xmlLocal = (doc: Document, tag: string): Element[] =>
-  Array.from(doc.getElementsByTagName("*")).filter(
-    (el) => el.localName === tag
-  );
-
-/**
- * OGC WCS 2.0.1 GetCoverage — the documented way to pull actual elevation
- * values (GeoTIFF) out of the EA composite DTM. Self-configuring: reads
- * GetCapabilities for the coverage id, then DescribeCoverage for the axis
- * labels, because those differ between service releases.
- */
-async function tryWcs(
-  slug: string,
-  bboxGeo: { south: number; west: number; north: number; east: number },
-  w: number,
-  h: number,
-  attempts: Attempt[]
-): Promise<ArrayBuffer | null> {
-  const base = `${WCS_BASE}/${slug}/wcs`;
-  const label = `WCS ${slug}`;
-  try {
-    const capRes = await fetch(
-      `${base}?service=WCS&version=2.0.1&request=GetCapabilities`
-    );
-    if (!capRes.ok) {
-      attempts.push({ label, detail: `GetCapabilities HTTP ${capRes.status}` });
-      return null;
-    }
-    const capDoc = new DOMParser().parseFromString(
-      await capRes.text(),
-      "text/xml"
-    );
-    const coverageId = xmlLocal(capDoc, "CoverageId")[0]?.textContent?.trim();
-    if (!coverageId) {
-      attempts.push({ label, detail: "no CoverageId in GetCapabilities" });
-      return null;
-    }
-
-    // Axis labels + native CRS drive the subset syntax.
-    let axes = ["Lat", "Long"];
-    try {
-      const descRes = await fetch(
-        `${base}?service=WCS&version=2.0.1&request=DescribeCoverage&coverageId=${encodeURIComponent(coverageId)}`
-      );
-      if (descRes.ok) {
-        const descDoc = new DOMParser().parseFromString(
-          await descRes.text(),
-          "text/xml"
-        );
-        const env = xmlLocal(descDoc, "Envelope")[0];
-        const labels = env?.getAttribute("axisLabels");
-        if (labels) axes = labels.trim().split(/\s+/);
-      }
-    } catch {
-      /* keep the default axis names */
-    }
-
-    // Subset in WGS84 regardless of the coverage's native CRS, and ask for
-    // Web Mercator output so the returned grid is north-up and linear in the
-    // same space the overlay is drawn in.
-    const isLat = (a: string) => /^(lat|n|y)/i.test(a);
-    const range = (a: string) =>
-      isLat(a)
-        ? `${bboxGeo.south},${bboxGeo.north}`
-        : `${bboxGeo.west},${bboxGeo.east}`;
-    const q = [
-      "service=WCS",
-      "version=2.0.1",
-      "request=GetCoverage",
-      `coverageId=${encodeURIComponent(coverageId)}`,
-      ...axes.map((a) => `subset=${encodeURIComponent(a)}(${range(a)})`),
-      "subsettingCrs=http://www.opengis.net/def/crs/EPSG/0/4326",
-      "outputCrs=http://www.opengis.net/def/crs/EPSG/0/3857",
-      "format=image/tiff",
-      `scaleSize=${encodeURIComponent(`${axes[0]}(${isLat(axes[0]) ? h : w}),${axes[1]}(${isLat(axes[1]) ? h : w})`)}`,
-    ].join("&");
-
-    const res = await fetch(`${base}?${q}`);
-    if (!res.ok) {
-      attempts.push({ label, detail: `GetCoverage HTTP ${res.status}` });
-      return null;
-    }
-    const buf = await res.arrayBuffer();
-    const err = decodeErrorBody(buf);
-    if (err) {
-      attempts.push({ label, detail: err });
-      return null;
-    }
-    return buf;
-  } catch (e) {
-    attempts.push({
-      label,
-      detail: e instanceof Error ? e.message : String(e),
-    });
-    return null;
-  }
-}
-
 export async function fetchDtmGrid(
   a: LatLng,
   b: LatLng
@@ -388,49 +90,44 @@ export async function fetchDtmGrid(
   const x1 = mercX(east);
   const y0 = mercY(south);
   const y1 = mercY(north);
-  const k = groundScale((south + north) / 2); // merc → true metres
+  const k = groundScale((south + north) / 2); // merc -> true metres
 
-  // Aim for one pixel per metre of real ground.
+  // Aim for roughly one pixel per metre of real ground.
   const cellMerc = 1 / k;
-  const w = Math.max(8, Math.min(1600, Math.round((x1 - x0) / cellMerc)));
-  const h = Math.max(8, Math.min(1600, Math.round((y1 - y0) / cellMerc)));
+  const px = Math.max(8, Math.min(1600, Math.round((x1 - x0) / cellMerc)));
+  const py = Math.max(8, Math.min(1600, Math.round((y1 - y0) / cellMerc)));
 
-  const attempts: Attempt[] = [];
-  let buf: ArrayBuffer | null = null;
-  let sourceName = "";
-
-  // 1) An ImageServer, if the dataset happens to be published as one.
-  const svc = await discoverDtmService().catch((e: unknown) => {
-    attempts.push({
-      label: "service directory",
-      detail: e instanceof Error ? e.message : String(e),
-    });
-    return null;
+  const q = new URLSearchParams({
+    s: String(south),
+    w: String(west),
+    n: String(north),
+    e: String(east),
+    px: String(px),
+    py: String(py),
   });
-  if (svc) {
-    buf = await tryImageServer(svc.url, [x0, y0, x1, y1], w, h, attempts);
-    if (buf) sourceName = svc.name;
-  }
 
-  // 2) The documented WCS coverages — finest grid first.
-  if (!buf) {
-    for (const slug of WCS_DTM_SLUGS) {
-      buf = await tryWcs(slug, { south, west, north, east }, w, h, attempts);
-      if (buf) {
-        sourceName = slug;
-        break;
-      }
+  const res = await fetch(`/api/lidar?${q.toString()}`);
+  if (!res.ok) {
+    let msg = `Levels service returned ${res.status}.`;
+    try {
+      const j = (await res.json()) as {
+        error?: string;
+        attempts?: { label: string; detail: string }[];
+      };
+      const tried = (j.attempts ?? [])
+        .map((t) => `${t.label}: ${t.detail}`)
+        .join(" | ");
+      msg = [j.error ?? msg, tried && `Tried - ${tried}`]
+        .filter(Boolean)
+        .join(" ");
+    } catch {
+      /* keep the status-code message */
     }
+    throw new Error(msg);
   }
 
-  if (!buf) {
-    const tried = attempts
-      .map((t) => `${t.label}: ${t.detail}`)
-      .join(" | ");
-    throw new Error(
-      `Could not read EA LiDAR levels here. Tried \u2014 ${tried || "no endpoints reachable"}`
-    );
-  }
+  const sourceName = res.headers.get("X-Lidar-Source") ?? "EA LiDAR";
+  const buf = await res.arrayBuffer();
 
   const { fromArrayBuffer } = await import("geotiff");
   const tiff = await fromArrayBuffer(buf);
@@ -454,7 +151,7 @@ export async function fetchDtmGrid(
   }
   if (valid < gw * gh * 0.05) {
     throw new Error(
-      "No LiDAR data here \u2014 EA coverage is England only (and has some gaps)."
+      "No LiDAR data here - EA coverage is England only (and has some gaps)."
     );
   }
 
