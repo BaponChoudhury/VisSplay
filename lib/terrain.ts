@@ -180,6 +180,49 @@ const cellLatLng = (g: DtmGrid, ix: number, iy: number): LatLng => ({
   ),
 });
 
+/**
+ * Blank out every cell outside a drawn polygon (set to no-data).
+ *
+ * Upstream can only serve rectangles, so an irregular area is fetched as its
+ * bounding box and masked here. This is what makes a drawn boundary
+ * meaningful for ponding: no-data cells drain, so the polygon edge becomes
+ * the line water spills over — trace a site boundary and the result answers
+ * "does it pond *within this site*".
+ */
+export function maskGridToPolygon(grid: DtmGrid, poly: LatLng[]): void {
+  if (poly.length < 3) return;
+  const px = poly.map((p) => mercX(p.lng));
+  const py = poly.map((p) => mercY(p.lat));
+  const x0 = mercX(grid.west);
+  const x1 = mercX(grid.east);
+  const y0 = mercY(grid.south);
+  const y1 = mercY(grid.north);
+  const n = poly.length;
+
+  // Ray casting in Mercator space — the polygon and the grid share that
+  // projection, so a planar test is exact here.
+  const inside = (x: number, y: number): boolean => {
+    let hit = false;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const yi = py[i];
+      const yj = py[j];
+      if (yi > y !== yj > y) {
+        const xCross = px[i] + ((y - yi) / (yj - yi)) * (px[j] - px[i]);
+        if (x < xCross) hit = !hit;
+      }
+    }
+    return hit;
+  };
+
+  for (let iy = 0; iy < grid.h; iy++) {
+    const y = y1 - ((iy + 0.5) / grid.h) * (y1 - y0);
+    for (let ix = 0; ix < grid.w; ix++) {
+      const x = x0 + ((ix + 0.5) / grid.w) * (x1 - x0);
+      if (!inside(x, y)) grid.z[iy * grid.w + ix] = NaN;
+    }
+  }
+}
+
 /** Binary min-heap keyed on number — for the priority-flood fill. */
 class MinHeap {
   keys: number[] = [];

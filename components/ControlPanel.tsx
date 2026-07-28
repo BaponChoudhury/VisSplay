@@ -179,12 +179,12 @@ export default function ControlPanel(props: Props) {
             } w-full`}
             disabled={props.levelsBusy || props.mapsStatus !== "ready"}
             onClick={props.onLevelsSelect}
-            title="Draw a box on the map; contours, low/high points and predicted ponding come from Environment Agency LiDAR (England)"
+            title="Click points on the map to outline the area; contours, low/high points and predicted ponding come from Environment Agency LiDAR (England)"
           >
             {props.levelsBusy
               ? "Fetching EA LiDAR\u2026"
               : props.levelsSelecting
-                ? "Click two corners on the map\u2026 (Esc cancels)"
+                ? "Click points to outline the area\u2026 (Esc cancels)"
                 : "\u26f0 Analyse ground levels in an area"}
           </button>
           {props.levelsError && (
@@ -265,9 +265,11 @@ export default function ControlPanel(props: Props) {
           <p className="mt-2 text-xs leading-4 text-slate-500">
             Environment Agency LiDAR composite DTM (bare-earth,{" "}
             <span className="text-slate-300">England only</span>, open data).
-            Blue shading = predicted ponding depth before water spills out of
-            the area; brown lines = contours. Existing ground at the survey
-            date — a desktop indicator, verify levels on site.
+            Click points to outline the area — trace the site boundary and
+            water is assumed to spill over that outline — then double-click or
+            press Enter to finish. Blue shading = predicted ponding depth;
+            brown lines = contours. Existing ground at the survey date — a
+            desktop indicator, verify levels on site.
           </p>
         </div>
 

@@ -60,17 +60,23 @@ in the PNG export. Note the 3D sightline check still tests against the
 
 ## Ground levels & ponding (EA LiDAR)
 
-**⛰ Analyse ground levels in an area** — click two corners of a box on the
-map (up to 500 m square) and the tool fetches the **Environment Agency LiDAR
-composite DTM** (bare-earth, ±5–15 cm vertical, open data, England only — no
-API key needed) and overlays:
+**⛰ Analyse ground levels in an area** — click points on the map to outline
+the area (double-click, press Enter, or click the first point to finish; up
+to 500 m across). The tool fetches the **Environment Agency LiDAR composite
+DTM** (bare-earth, ±5–15 cm vertical, open data, England only — no API key
+needed) for the outline's bounding box, masks everything outside the shape,
+and overlays:
 
 - a hypsometric elevation tint with **contours** (0.1 / 0.25 / 0.5 / 1 m
   interval, index contours emphasised),
 - **▼ lowest** and **▲ highest** ground markers (m AOD),
 - **💧 predicted ponding** — a priority-flood depression fill shades where
-  water would collect before spilling out of the selected area, deeper =
+  water would collect before spilling out of the outlined area, deeper =
   more opaque blue, with the deepest point marked.
+
+Because everything outside the outline is treated as no-data, and no-data
+drains, the shape you draw *is* the spill boundary — trace a site boundary
+and the answer is "does it pond within this site".
 
 The panel reports lowest/highest ground, deepest ponding and the ponded
 fraction of the area; the overlay is included in the PNG export with a
@@ -79,10 +85,10 @@ desktop indicator, not a substitute for a topographical survey.
 
 The EA endpoints send no CORS headers, so a browser cannot call them
 directly. Requests go through `app/api/lidar/route.ts`, which runs
-server-side: it discovers the ArcGIS service, then tries ImageServer
-`exportImage` (raw Float32 values) and the documented OGC WCS 2.0.1
-coverages (1 m, then 2 m). If every endpoint fails it returns a 502 listing
-each attempt and what it returned, which the panel shows verbatim.
+server-side and tries, in order: **WCS 1.0.0** `GetCoverage` (the simplest
+syntax, and the one the EA service accepts), WCS 2.0.1, then ArcGIS
+ImageServer `exportImage`. If every endpoint fails it returns a 502 listing
+each attempt and the upstream response, which the panel shows verbatim.
 
 ## Architecture notes
 
@@ -121,5 +127,7 @@ indicator and verify on site. Eye height and object height come from the
 
 - **Phase 1** — 2D map splay tool ✅
 - **3D automated sightline check** (CesiumJS + Google 3D Tiles) ✅
+- **Design layout overlay** — check splays against proposed layouts ✅
+- **Ground levels & ponding** (EA LiDAR DTM) ✅
 - **Future** — line-of-sight testing against Environment Agency LiDAR DSM
   (bare-earth + surface, less noisy than photogrammetry)

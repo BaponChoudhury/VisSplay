@@ -33,6 +33,7 @@ import {
   LEVELS_MIN_SIDE_M,
   analyseLevels,
   fetchDtmGrid,
+  maskGridToPolygon,
   renderLevelsImage,
   type LevelsAnalysis,
 } from "@/lib/terrain";
@@ -128,8 +129,11 @@ export default function SplayCheckApp() {
   }>({ move: null, corner: null });
   const levelsOverlayRef = useRef<DesignOverlayHandle | null>(null);
   const levelsMarkersRef = useRef<google.maps.Marker[]>([]);
-  const levelsRectRef = useRef<google.maps.Rectangle | null>(null);
-  const levelsCorner1Ref = useRef<LatLng | null>(null);
+  const levelsPolyPtsRef = useRef<LatLng[]>([]);
+  const levelsDraftRef = useRef<google.maps.Polygon | null>(null);
+  const levelsRubberRef = useRef<google.maps.Polyline | null>(null);
+  const levelsVertexRef = useRef<google.maps.Marker[]>([]);
+  const levelsOutlineRef = useRef<google.maps.Polygon | null>(null);
 
   const [mapReady, setMapReady] = useState(false);
   const [mode, setMode] = useState<Mode>("manual");
@@ -178,6 +182,8 @@ export default function SplayCheckApp() {
 
   // Ground levels & ponding (EA LiDAR).
   const [levelsSelecting, setLevelsSelecting] = useState(false);
+  const [levelsPtCount, setLevelsPtCount] = useState(0);
+  const [levelsPolygon, setLevelsPolygon] = useState<LatLng[] | null>(null);
   const [levelsBusy, setLevelsBusy] = useState(false);
   const [levelsError, setLevelsError] = useState<string | null>(null);
   const [levelsAnalysis, setLevelsAnalysis] = useState<LevelsAnalysis | null>(null);
@@ -250,16 +256,18 @@ export default function SplayCheckApp() {
     }
 
     if (live.levelsSelecting) {
-      const c1 = levelsCorner1Ref.current;
-      if (!c1) {
-        levelsCorner1Ref.current = pos;
-      } else {
-        setLevelsSelecting(false);
-        levelsCorner1Ref.current = null;
-        levelsRectRef.current?.setMap(null);
-        levelsRectRef.current = null;
-        void runLevels(c1, pos);
+      const pts = levelsPolyPtsRef.current;
+      // Clicking the first vertex again closes the shape (as does Enter or a
+      // double-click) — the usual way to finish a polygon on a map.
+      if (pts.length >= 3 && distanceM(pts[0], pos) <= closeRadiusM()) {
+        closeLevelsPolygon();
+        return;
       }
+      // Ignore an accidental double-tap on the same spot.
+      if (pts.length && distanceM(pts[pts.length - 1], pos) < 0.5) return;
+      levelsPolyPtsRef.current = [...pts, pos];
+      drawLevelsDraft(pos);
+      setLevelsPtCount(levelsPolyPtsRef.current.length);
       return;
     }
 
@@ -315,24 +323,8 @@ export default function SplayCheckApp() {
     const map = mapRef.current;
     if (!map) return;
 
-    if (live.levelsSelecting && levelsCorner1Ref.current) {
-      const c1 = levelsCorner1Ref.current;
-      if (!levelsRectRef.current) {
-        levelsRectRef.current = new google.maps.Rectangle({
-          map,
-          clickable: false,
-          fillColor: "#38bdf8",
-          fillOpacity: 0.08,
-          strokeColor: "#38bdf8",
-          strokeWeight: 1.5,
-        });
-      }
-      levelsRectRef.current.setBounds(
-        new google.maps.LatLngBounds(
-          { lat: Math.min(c1.lat, pos.lat), lng: Math.min(c1.lng, pos.lng) },
-          { lat: Math.max(c1.lat, pos.lat), lng: Math.max(c1.lng, pos.lng) }
-        )
-      );
+    if (live.levelsSelecting && levelsPolyPtsRef.current.length) {
+      drawLevelsDraft(pos);
     }
 
     if (live.step !== "origin" || !live.points.mouth) {
@@ -382,6 +374,88 @@ export default function SplayCheckApp() {
     ghostLineRef.current.setPath([mouth, ghost]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** How close a click must be to the first vertex to close the ring. */
+  function closeRadiusM(): number {
+    const map = mapRef.current;
+    const zoom = map?.getZoom() ?? 18;
+    // ~12 screen pixels in ground metres at this zoom and latitude.
+    const mPerPx = (156543.03392 * Math.cos((UK_CENTER.lat * Math.PI) / 180)) /
+      Math.pow(2, zoom);
+    return Math.max(2, 12 * mPerPx);
+  }
+
+  /** Redraw the in-progress ring: filled shape, vertices, and a line to the
+   *  cursor so the next edge is visible before it is placed. */
+  function drawLevelsDraft(cursor?: LatLng) {
+    const map = mapRef.current;
+    if (!map) return;
+    const pts = levelsPolyPtsRef.current;
+
+    if (!levelsDraftRef.current) {
+      levelsDraftRef.current = new google.maps.Polygon({
+        map,
+        clickable: false,
+        fillColor: "#38bdf8",
+        fillOpacity: 0.1,
+        strokeColor: "#38bdf8",
+        strokeWeight: 2,
+      });
+    }
+    levelsDraftRef.current.setPath(pts);
+
+    if (!levelsRubberRef.current) {
+      levelsRubberRef.current = new google.maps.Polyline({
+        map,
+        clickable: false,
+        strokeColor: "#7dd3fc",
+        strokeOpacity: 0.9,
+        strokeWeight: 1.5,
+      });
+    }
+    levelsRubberRef.current.setPath(
+      cursor && pts.length ? [pts[pts.length - 1], cursor] : []
+    );
+
+    levelsVertexRef.current.forEach((m) => m.setMap(null));
+    levelsVertexRef.current = pts.map(
+      (p, i) =>
+        new google.maps.Marker({
+          map,
+          position: p,
+          clickable: false,
+          zIndex: 30,
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            // The first vertex is the one to click to close the ring.
+            scale: i === 0 && pts.length >= 3 ? 7 : 4.5,
+            fillColor: i === 0 ? "#0ea5e9" : "#7dd3fc",
+            fillOpacity: 1,
+            strokeColor: "#ffffff",
+            strokeWeight: i === 0 && pts.length >= 3 ? 2.5 : 1.5,
+          },
+        })
+    );
+  }
+
+  function clearLevelsDraft() {
+    levelsPolyPtsRef.current = [];
+    levelsDraftRef.current?.setMap(null);
+    levelsDraftRef.current = null;
+    levelsRubberRef.current?.setMap(null);
+    levelsRubberRef.current = null;
+    levelsVertexRef.current.forEach((m) => m.setMap(null));
+    levelsVertexRef.current = [];
+    setLevelsPtCount(0);
+  }
+
+  function closeLevelsPolygon() {
+    const pts = levelsPolyPtsRef.current;
+    if (pts.length < 3) return;
+    setLevelsSelecting(false);
+    clearLevelsDraft();
+    void runLevels(pts);
+  }
 
   function clearGhost() {
     ghostMarkerRef.current?.setMap(null);
@@ -481,6 +555,10 @@ export default function SplayCheckApp() {
     map.addListener("mousemove", (e: google.maps.MapMouseEvent) => {
       if (e.latLng) handleMapMouseMove(e.latLng.toJSON());
     });
+    // Double-click is the conventional "finish this polygon" gesture.
+    map.addListener("dblclick", () => {
+      if (liveRef.current.levelsSelecting) closeLevelsPolygon();
+    });
     // Keep the view top-down; 45° imagery breaks the export projection maths.
     map.addListener("tilt_changed", () => {
       if (map.getTilt() !== 0) map.setTilt(0);
@@ -492,6 +570,12 @@ export default function SplayCheckApp() {
   useEffect(() => {
     mapRef.current?.setMapTypeId(mapType);
   }, [mapType]);
+
+  // While drawing the levels area, a double-click finishes the ring rather
+  // than zooming the map.
+  useEffect(() => {
+    mapRef.current?.setOptions({ disableDoubleClickZoom: levelsSelecting });
+  }, [levelsSelecting]);
 
   // ------------------------------------------------------- places search
   useEffect(() => {
@@ -813,8 +897,31 @@ export default function SplayCheckApp() {
     if (!settings) {
       levelsOverlayRef.current?.remove();
       levelsOverlayRef.current = null;
+      levelsOutlineRef.current?.setMap(null);
+      levelsOutlineRef.current = null;
       clearMarkers();
       return;
+    }
+
+    // Keep the analysed boundary on screen — it is the line water spills over.
+    if (levelsPolygon && levelsVisible) {
+      if (!levelsOutlineRef.current) {
+        levelsOutlineRef.current = new google.maps.Polygon({
+          map,
+          clickable: false,
+          fillOpacity: 0,
+          strokeColor: "#38bdf8",
+          strokeOpacity: 0.9,
+          strokeWeight: 2,
+          zIndex: 5,
+        });
+      }
+      levelsOutlineRef.current.setPath(levelsPolygon);
+      if (levelsOutlineRef.current.getMap() !== map) {
+        levelsOutlineRef.current.setMap(map);
+      }
+    } else {
+      levelsOutlineRef.current?.setMap(null);
     }
     if (!levelsOverlayRef.current) {
       levelsOverlayRef.current = createDesignOverlay(map, settings);
@@ -869,7 +976,14 @@ export default function SplayCheckApp() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapReady, levelsAnalysis, levelsImgUrl, levelsOpacity, levelsVisible]);
+  }, [
+    mapReady,
+    levelsAnalysis,
+    levelsImgUrl,
+    levelsOpacity,
+    levelsVisible,
+    levelsPolygon,
+  ]);
 
   // Google Maps needs a resize nudge when the split layout changes width.
   useEffect(() => {
@@ -902,9 +1016,7 @@ export default function SplayCheckApp() {
           clearMeasure();
         } else if (liveRef.current.levelsSelecting) {
           setLevelsSelecting(false);
-          levelsCorner1Ref.current = null;
-          levelsRectRef.current?.setMap(null);
-          levelsRectRef.current = null;
+          clearLevelsDraft();
         } else if (liveRef.current.designAdjust) {
           setDesignAdjust(false);
         } else if (
@@ -916,7 +1028,9 @@ export default function SplayCheckApp() {
           setStep("idle");
         }
       } else if (e.key === "Enter") {
-        if (liveRef.current.measuring) {
+        if (liveRef.current.levelsSelecting) {
+          closeLevelsPolygon();
+        } else if (liveRef.current.measuring) {
           setMeasuring(false); // keep the measured line on screen
         } else if (
           liveRef.current.step !== "idle" &&
@@ -1040,9 +1154,7 @@ export default function SplayCheckApp() {
   const startLevelsSelect = () => {
     if (levelsBusy) return;
     setLevelsError(null);
-    levelsCorner1Ref.current = null;
-    levelsRectRef.current?.setMap(null);
-    levelsRectRef.current = null;
+    clearLevelsDraft();
     setLevelsSelecting((v) => !v);
   };
 
@@ -1051,47 +1163,56 @@ export default function SplayCheckApp() {
     setLevelsAnalysis(null);
     setLevelsImgUrl(null);
     setLevelsError(null);
-    levelsCorner1Ref.current = null;
-    levelsRectRef.current?.setMap(null);
-    levelsRectRef.current = null;
+    setLevelsPolygon(null);
+    clearLevelsDraft();
   };
 
-  const runLevels = async (c1: LatLng, c2: LatLng) => {
-    // Clamp the box to the maximum side, keeping the first corner fixed.
-    const mPerLat = 111320;
-    const mPerLng = 111320 * Math.cos((c1.lat * Math.PI) / 180);
-    const clampTo = (from: number, to: number, mPerUnit: number) => {
-      const d = Math.abs(to - from) * mPerUnit;
-      return d <= LEVELS_MAX_SIDE_M
-        ? to
-        : from + Math.sign(to - from) * (LEVELS_MAX_SIDE_M / mPerUnit);
-    };
-    const c2c: LatLng = {
-      lat: clampTo(c1.lat, c2.lat, mPerLat),
-      lng: clampTo(c1.lng, c2.lng, mPerLng),
-    };
-    if (
-      Math.abs(c2c.lat - c1.lat) * mPerLat < LEVELS_MIN_SIDE_M ||
-      Math.abs(c2c.lng - c1.lng) * mPerLng < LEVELS_MIN_SIDE_M
-    ) {
+  const runLevels = async (poly: LatLng[]) => {
+    if (poly.length < 3) return;
+    const lats = poly.map((p) => p.lat);
+    const lngs = poly.map((p) => p.lng);
+    const south = Math.min(...lats);
+    const north = Math.max(...lats);
+    const west = Math.min(...lngs);
+    const east = Math.max(...lngs);
+
+    // The upstream service serves rectangles, so the polygon's bounding box
+    // is fetched and then masked. Size limits apply to that box.
+    const widthM = distanceM({ lat: south, lng: west }, { lat: south, lng: east });
+    const heightM = distanceM({ lat: south, lng: west }, { lat: north, lng: west });
+    if (Math.max(widthM, heightM) > LEVELS_MAX_SIDE_M) {
       flash(
-        `Levels area too small — make it at least ${LEVELS_MIN_SIDE_M} m each way.`
+        `Area too large — keep it within ${LEVELS_MAX_SIDE_M} m across (this one spans ${Math.round(
+          Math.max(widthM, heightM)
+        )} m).`
       );
       return;
     }
+    if (Math.max(widthM, heightM) < LEVELS_MIN_SIDE_M) {
+      flash(`Area too small — make it at least ${LEVELS_MIN_SIDE_M} m across.`);
+      return;
+    }
+
     setLevelsBusy(true);
     setLevelsError(null);
     try {
-      const { grid, sourceName } = await fetchDtmGrid(c1, c2c);
+      const { grid, sourceName } = await fetchDtmGrid(
+        { lat: south, lng: west },
+        { lat: north, lng: east }
+      );
+      // Everything outside the drawn shape becomes no-data, so the boundary
+      // is what water spills over and the levels reported are inside-only.
+      maskGridToPolygon(grid, poly);
       const analysis = analyseLevels(grid, sourceName);
       setLevelsAnalysis(analysis);
+      setLevelsPolygon(poly);
       setLevelsImgUrl(
         renderLevelsImage(analysis, liveRef.current.levelsIntervalM)
       );
       setLevelsVisible(true);
       flash(
         analysis.maxDepth > 0.02
-          ? `Deepest predicted ponding: ${analysis.maxDepth.toFixed(2)} m (before overspill).`
+          ? `Deepest predicted ponding: ${analysis.maxDepth.toFixed(2)} m (before it spills out of the area).`
           : "Area drains — no ponding deeper than 2 cm predicted."
       );
     } catch (err) {
@@ -1277,7 +1398,10 @@ export default function SplayCheckApp() {
     designHandlesRef.current.move?.setMap(map);
     designHandlesRef.current.corner?.setMap(map);
     levelsMarkersRef.current.forEach((m) => m.setMap(map));
-    levelsRectRef.current?.setMap(map);
+    levelsOutlineRef.current?.setMap(map);
+    levelsDraftRef.current?.setMap(map);
+    levelsRubberRef.current?.setMap(map);
+    levelsVertexRef.current.forEach((m) => m.setMap(map));
     // Overlay images are redrawn onto the export canvas from coordinates,
     // like the splay geometry, so hide the live elements during capture too.
     designOverlayRef.current?.setHidden(!visible);
@@ -1333,7 +1457,11 @@ export default function SplayCheckApp() {
     : levelsBusy
       ? "Fetching EA LiDAR ground levels…"
       : levelsSelecting
-        ? `Ground levels — click two opposite corners of the area to analyse (up to ${LEVELS_MAX_SIDE_M} m square). Esc cancels.`
+        ? levelsPtCount === 0
+          ? `Ground levels — click around the area to analyse (up to ${LEVELS_MAX_SIDE_M} m across). Esc cancels.`
+          : levelsPtCount < 3
+            ? `Ground levels — ${levelsPtCount} point${levelsPtCount === 1 ? "" : "s"} placed; at least 3 needed. Esc cancels.`
+            : `Ground levels — ${levelsPtCount} points. Click the first point, double-click, or press Enter to finish. Esc cancels.`
         : designAdjust && design && step !== "mouth" && step !== "origin" && step !== "left" && step !== "right"
           ? "Align the design layout — drag the round handle to move the plan, the square corner handle to rotate & scale. Esc / toggle Adjust when the plan sits on the existing road."
           : STEP_PROMPTS[step];
